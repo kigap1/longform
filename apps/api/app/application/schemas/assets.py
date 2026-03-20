@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 
 from app.application.schemas.common import APIModel
@@ -46,6 +48,8 @@ class ImageGenerateRequest(APIModel):
     reference_snapshot_ids: list[str] = Field(default_factory=list)
     layout: KoreanInfographicLayoutInput | None = None
     user_instructions: str = ""
+    provider_id: Literal["openai", "claude", "gemini", "kling"] | None = None
+    provider_mode: Literal["mock", "real"] | None = None
 
 
 class ImageRegenerateSceneRequest(APIModel):
@@ -56,6 +60,8 @@ class ImageRegenerateSceneRequest(APIModel):
     reference_snapshot_ids: list[str] = Field(default_factory=list)
     layout: KoreanInfographicLayoutInput | None = None
     user_instructions: str = ""
+    provider_id: Literal["openai", "claude", "gemini", "kling"] | None = None
+    provider_mode: Literal["mock", "real"] | None = None
 
 
 class SceneImagePromptUpdateRequest(APIModel):
@@ -78,7 +84,9 @@ class ImageAssetSummary(APIModel):
     asset_url: str
     thumbnail_url: str
     status: str
+    provider_id: str = ""
     provider_name: str = ""
+    provider_mode: str = ""
     character_profile_id: str | None = None
     character_name: str = ""
     project_locked_character: bool = False
@@ -102,12 +110,16 @@ class VideoPrepareRequest(APIModel):
     vertical_instructions: VerticalVideoInstructionsInput = Field(default_factory=VerticalVideoInstructionsInput)
     include_latest_image: bool = True
     user_instructions: str = ""
+    provider_id: Literal["openai", "claude", "gemini", "kling"] | None = None
+    provider_mode: Literal["mock", "real"] | None = None
 
 
 class VideoExecutionRequest(APIModel):
     project_id: str
     video_asset_ids: list[str]
     user_instructions: str = ""
+    provider_id: Literal["openai", "claude", "gemini", "kling"] | None = None
+    provider_mode: Literal["mock", "real"] | None = None
 
 
 class VideoAssetSummary(APIModel):
@@ -120,6 +132,7 @@ class VideoAssetSummary(APIModel):
     bundle_path: str
     bundle_download_path: str = ""
     status: str
+    provider_id: str = ""
     provider_name: str = ""
     provider_mode: str = ""
     vertical_instructions: VerticalVideoInstructionsInput | None = None
@@ -130,6 +143,7 @@ class VideoExecutionSummary(APIModel):
     video_asset_id: str
     scene_id: str
     status: str
+    provider_id: str = ""
     provider_name: str = ""
     provider_mode: str = ""
     provider_job_id: str = ""

@@ -44,6 +44,39 @@ class AppSettingUpsertRequest(APIModel):
     secret: bool = False
 
 
+class AIProviderFieldSummary(APIModel):
+    key: str
+    label: str
+    placeholder: str
+    secret: bool = False
+    configured: bool = False
+
+
+class AIProviderStageSupportSummary(APIModel):
+    stage: str
+    supported: bool
+    mock_available: bool
+    real_available: bool
+    default_mode: str = "mock"
+    note: str = ""
+    default_selected: bool = False
+
+
+class AIProviderSummary(APIModel):
+    id: str
+    label: str
+    description: str
+    order: int
+    configured: bool = False
+    fields: list[AIProviderFieldSummary] = Field(default_factory=list)
+    stages: list[AIProviderStageSupportSummary] = Field(default_factory=list)
+
+
+class AIProviderCatalogResponse(APIModel):
+    items: list[AIProviderSummary] = Field(default_factory=list)
+    defaults: dict[str, str] = Field(default_factory=dict)
+
+
 class EvidenceReportSection(APIModel):
     title: str
     summary: str

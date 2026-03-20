@@ -2,7 +2,12 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiClient, type SettingUpsertPayload, type SnapshotCapturePayload } from "@/lib/api/client";
+import {
+  apiClient,
+  type IssueRankPayload,
+  type SettingUpsertPayload,
+  type SnapshotCapturePayload
+} from "@/lib/api/client";
 import {
   getImageWorkspace,
   getReviewWorkspace,
@@ -29,6 +34,22 @@ export function useIssuesQuery(projectId?: string) {
   return useQuery({
     queryKey: ["issues", projectId ?? "current"],
     queryFn: () => apiClient.issues(projectId)
+  });
+}
+
+export function useRankIssuesMutation(projectId?: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: IssueRankPayload) => apiClient.rankIssues(payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["issues"] });
+      if (projectId) {
+        await queryClient.invalidateQueries({ queryKey: ["issues", projectId] });
+        await queryClient.invalidateQueries({ queryKey: ["dashboard", projectId] });
+        await queryClient.invalidateQueries({ queryKey: ["jobs", projectId] });
+      }
+    }
   });
 }
 
@@ -75,6 +96,51 @@ export function useScriptsQuery() {
   });
 }
 
+export function useAIProvidersQuery() {
+  return useQuery({
+    queryKey: ["ai-providers"],
+    queryFn: () => apiClient.aiProviders()
+  });
+}
+
+export function useScriptWorkspaceQuery(projectId?: string) {
+  return useQuery({
+    queryKey: ["script-workspace", projectId ?? "current"],
+    queryFn: () => apiClient.scriptWorkspace(projectId ?? "project-1"),
+    enabled: Boolean(projectId)
+  });
+}
+
+export function useGenerateScriptMutation(projectId?: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: Parameters<typeof apiClient.generateScript>[0]) => apiClient.generateScript(payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["script-workspace"] });
+      if (projectId) {
+        await queryClient.invalidateQueries({ queryKey: ["script-workspace", projectId] });
+        await queryClient.invalidateQueries({ queryKey: ["jobs", projectId] });
+      }
+    }
+  });
+}
+
+export function useRegenerateScriptSectionMutation(projectId?: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: Parameters<typeof apiClient.regenerateScriptSection>[0]) => apiClient.regenerateScriptSection(payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["script-workspace"] });
+      if (projectId) {
+        await queryClient.invalidateQueries({ queryKey: ["script-workspace", projectId] });
+        await queryClient.invalidateQueries({ queryKey: ["jobs", projectId] });
+      }
+    }
+  });
+}
+
 export function useCharactersQuery(projectId?: string) {
   return useQuery({
     queryKey: ["characters", projectId ?? "current"],
@@ -89,10 +155,84 @@ export function useImagesQuery() {
   });
 }
 
+export function useImageWorkspaceQuery(projectId?: string) {
+  return useQuery({
+    queryKey: ["image-workspace", projectId ?? "current"],
+    queryFn: () => apiClient.images(projectId ?? "project-1"),
+    enabled: Boolean(projectId)
+  });
+}
+
+export function useGenerateImageMutation(projectId?: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: Parameters<typeof apiClient.generateImage>[0]) => apiClient.generateImage(payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["image-workspace"] });
+      if (projectId) {
+        await queryClient.invalidateQueries({ queryKey: ["image-workspace", projectId] });
+        await queryClient.invalidateQueries({ queryKey: ["jobs", projectId] });
+      }
+    }
+  });
+}
+
+export function useRegenerateImageMutation(projectId?: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: Parameters<typeof apiClient.regenerateImage>[0]) => apiClient.regenerateImage(payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["image-workspace"] });
+      if (projectId) {
+        await queryClient.invalidateQueries({ queryKey: ["image-workspace", projectId] });
+        await queryClient.invalidateQueries({ queryKey: ["jobs", projectId] });
+      }
+    }
+  });
+}
+
 export function useVideosQuery() {
   return useQuery({
     queryKey: ["mock", "videos"],
     queryFn: getVideoWorkspace
+  });
+}
+
+export function useVideoWorkspaceQuery(projectId?: string) {
+  return useQuery({
+    queryKey: ["video-workspace", projectId ?? "current"],
+    queryFn: () => apiClient.images(projectId ?? "project-1"),
+    enabled: Boolean(projectId)
+  });
+}
+
+export function usePrepareVideosMutation(projectId?: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: Parameters<typeof apiClient.prepareVideos>[0]) => apiClient.prepareVideos(payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      if (projectId) {
+        await queryClient.invalidateQueries({ queryKey: ["jobs", projectId] });
+      }
+    }
+  });
+}
+
+export function useExecuteVideosMutation(projectId?: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: Parameters<typeof apiClient.executeVideos>[0]) => apiClient.executeVideos(payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      if (projectId) {
+        await queryClient.invalidateQueries({ queryKey: ["jobs", projectId] });
+      }
+    }
   });
 }
 

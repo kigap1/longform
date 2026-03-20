@@ -9,6 +9,7 @@ from app.application.schemas.assets import (
     VideoExecutionSummary,
     VideoPrepareRequest,
 )
+from app.presentation.api.errors import raise_service_http_error
 from app.presentation.api.dependencies import ServiceBundleDep
 
 
@@ -17,12 +18,18 @@ router = APIRouter()
 
 @router.post("/prepare", response_model=list[VideoAssetSummary])
 def prepare_videos(payload: VideoPrepareRequest, services: ServiceBundleDep) -> list[VideoAssetSummary]:
-    return services.videos.prepare(payload)
+    try:
+        return services.videos.prepare(payload)
+    except Exception as exc:
+        raise_service_http_error(exc)
 
 
 @router.post("/execute", response_model=list[VideoExecutionSummary])
 def execute_videos(payload: VideoExecutionRequest, services: ServiceBundleDep) -> list[VideoExecutionSummary]:
-    return services.videos.execute(payload)
+    try:
+        return services.videos.execute(payload)
+    except Exception as exc:
+        raise_service_http_error(exc)
 
 
 @router.get("/bundles/{video_asset_id}")

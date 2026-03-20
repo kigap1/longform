@@ -54,7 +54,7 @@
 - 책임: 장면별 video prompt/bundle 준비와 bundle 실행
 - 입력: `SceneVideoPreparationRequestPayload`, `VideoExecutionRequestPayload`
 - 출력: `VideoPreparationPayload`, `VideoExecutionPayload`
-- 대상 제공자: Veo 3.1 또는 대체 워크플로
+- 대상 제공자: Veo 3.1 또는 대체 워크플로, Kling AI 브리지
 
 ## 설계 원칙
 
@@ -72,7 +72,7 @@
 - 스냅샷: `MockSnapshotAdapter`
 - 대본: `ClaudeMessagesMockAdapter`, `ClaudeMessagesAPIAdapter`
 - 이미지: `MockImageGeneratorAdapter`
-- 영상: `MockVeoWorkflowAdapter`
+- 영상: `MockVeoWorkflowAdapter`, `KlingVideoBridgeAdapter`
 
 ## 실제 연동 시 남은 일
 
@@ -81,5 +81,6 @@
 - Claude Messages API: 모델명/버전 운영 정책 확정, 요청 단위 provider mode 운영 규칙 확정, 응답 JSON 실패 시 재시도/복구 전략 추가
 - 이미지 제공자: reference image 입력, edit API, 업로드 자산 처리, provider별 응답 URL/파일 저장 정책 확정
 - 비디오 제공자: bundle 업로드/참조 이미지 입력, provider job polling, 최종 mp4 저장 정책, 실패 재시도/콜백 처리 확정
+- Kling AI: 공식 웹앱에서 확인된 base URL 외에 submit/status/result 계약은 공개 문서로 확정하지 못했으므로 현재는 설정 가능한 브리지형 adapter로 유지
 - 모든 제공자: 네트워크 오류와 빈 응답 처리, 관측 가능성 로그, 캐시/백오프 정책 추가
 - 공통: mock sample data를 실제 응답 DTO로 교체하고, provider별 통합 테스트를 별도 추가

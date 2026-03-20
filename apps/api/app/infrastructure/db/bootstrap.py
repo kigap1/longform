@@ -21,7 +21,32 @@ def seed_demo_data(session: Session) -> None:
         )
 
     if not repositories.settings.list_all():
+        repositories.settings.upsert(category="api", key="openai_api_key", value="", secret=True)
+        repositories.settings.upsert(category="api", key="openai_base_url", value="https://api.openai.com/v1", secret=False)
+        repositories.settings.upsert(category="api", key="openai_model", value="", secret=False)
+        repositories.settings.upsert(category="api", key="openai_image_model", value="", secret=False)
+        repositories.settings.upsert(category="api", key="openai_video_model", value="", secret=False)
+        repositories.settings.upsert(category="api", key="claude_api_key", value="", secret=True)
+        repositories.settings.upsert(category="api", key="claude_api_url", value="https://api.anthropic.com/v1/messages", secret=False)
+        repositories.settings.upsert(category="api", key="claude_api_version", value="2023-06-01", secret=False)
         repositories.settings.upsert(category="api", key="claude_model", value="claude-sonnet", secret=False)
+        repositories.settings.upsert(category="api", key="gemini_api_key", value="", secret=True)
+        repositories.settings.upsert(category="api", key="gemini_base_url", value="https://generativelanguage.googleapis.com", secret=False)
+        repositories.settings.upsert(category="api", key="gemini_model", value="", secret=False)
+        repositories.settings.upsert(category="api", key="gemini_image_model", value="", secret=False)
+        repositories.settings.upsert(category="api", key="gemini_video_model", value="", secret=False)
+        repositories.settings.upsert(category="api", key="kling_api_key", value="", secret=True)
+        repositories.settings.upsert(category="api", key="kling_base_url", value="https://api-app-global.klingai.com", secret=False)
+        repositories.settings.upsert(category="api", key="kling_video_model", value="", secret=False)
+        repositories.settings.upsert(category="api", key="kling_submit_path", value="", secret=False)
+        repositories.settings.upsert(category="api", key="kling_status_path", value="", secret=False)
+        repositories.settings.upsert(category="api", key="kling_result_path", value="", secret=False)
+        repositories.settings.upsert(category="api", key="script_default_provider", value="openai", secret=False)
+        repositories.settings.upsert(category="api", key="image_default_provider", value="openai", secret=False)
+        repositories.settings.upsert(category="api", key="video_default_provider", value="openai", secret=False)
+        repositories.settings.upsert(category="api", key="script_provider_mode", value="mock", secret=False)
+        repositories.settings.upsert(category="api", key="image_provider_mode", value="mock", secret=False)
+        repositories.settings.upsert(category="api", key="video_provider_mode", value="mock", secret=False)
         repositories.settings.upsert(category="stats", key="freshness_threshold_days", value="45", secret=False)
         repositories.settings.upsert(category="storage", key="mode", value="local", secret=False)
 
@@ -87,4 +112,3 @@ def seed_demo_data(session: Session) -> None:
         repositories.jobs.add_log(job_id=job.id, level="INFO", message="데모 작업이 생성되었습니다.")
 
     session.commit()
-

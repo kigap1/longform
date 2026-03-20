@@ -94,7 +94,8 @@ class ScriptServiceTests(TestCase):
         )
 
         self.assertEqual(summary.provider_mode, "mock")
-        self.assertEqual(summary.provider_name, "Claude Messages API")
+        self.assertEqual(summary.provider_id, "openai")
+        self.assertEqual(summary.provider_name, "OpenAI")
         self.assertGreaterEqual(len(summary.sections), 3)
         self.assertGreaterEqual(len(summary.scenes), 2)
         self.assertGreaterEqual(len(summary.evidence_mappings), 1)
@@ -103,6 +104,7 @@ class ScriptServiceTests(TestCase):
         script = self.repositories.scripts.get(summary.id)
         self.assertIsNotNone(script)
         self.assertEqual((script.prompt_snapshot or {})["provider"]["mode"], "mock")
+        self.assertEqual((script.prompt_snapshot or {})["provider"]["id"], "openai")
         self.assertGreaterEqual(len((script.prompt_snapshot or {})["result"]["sections"]), 3)
         self.assertGreaterEqual(len((script.prompt_snapshot or {})["result"]["scenes"]), 2)
 

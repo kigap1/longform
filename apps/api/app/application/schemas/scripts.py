@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 
 from app.application.schemas.common import APIModel, EvidenceReference
@@ -17,6 +19,7 @@ class ScriptGenerationRequest(APIModel):
     style_preset: str = "설명형"
     audience_type: str = "대중"
     tone: str = "차분한 분석형"
+    provider_id: Literal["openai", "claude", "gemini"] | None = None
     provider_mode: str | None = None
     model_override: str | None = None
 
@@ -54,6 +57,7 @@ class ScriptSummary(APIModel):
     body: str = ""
     conclusion: str = ""
     version_number: int = 1
+    provider_id: str = ""
     provider_name: str = ""
     provider_mode: str = ""
     style_preset: str = ""
@@ -74,6 +78,7 @@ class RegenerateSectionRequest(APIModel):
     style_preset: str | None = None
     audience_type: str | None = None
     tone: str | None = None
+    provider_id: Literal["openai", "claude", "gemini"] | None = None
     provider_mode: str | None = None
     model_override: str | None = None
 

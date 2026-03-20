@@ -5,10 +5,11 @@ import { useEffect, useMemo, useState } from "react";
 import { LoadingPanel } from "@/components/shared/loading-panel";
 import { PageHeader } from "@/components/shared/page-header";
 import { SectionCard } from "@/components/shared/section-card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs } from "@/components/ui/tabs";
-import { useSaveSettingsMutation, useSettingsQuery } from "@/lib/api/hooks";
+import { useAIProvidersQuery, useSaveSettingsMutation, useSettingsQuery } from "@/lib/api/hooks";
 
 
 function fieldId(category: string, key: string) {
@@ -17,6 +18,7 @@ function fieldId(category: string, key: string) {
 
 export default function SettingsPage() {
   const { data, isLoading } = useSettingsQuery();
+  const { data: aiProviders } = useAIProvidersQuery();
   const saveSettings = useSaveSettingsMutation();
   const [activeTab, setActiveTab] = useState("API");
   const [draftValues, setDraftValues] = useState<Record<string, string>>({});
@@ -78,6 +80,45 @@ export default function SettingsPage() {
           {saveSettings.isPending ? "저장 중..." : "현재 탭 저장"}
         </Button>
       </div>
+
+      <div className="mb-6 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-700">
+        AI 키와 기본 공급자 관리는 사이드바의 `AI 연결` 메뉴에서 더 집중적으로 다룰 수 있습니다.
+      </div>
+
+      {activeTab === "API" && aiProviders ? (
+        <div className="mb-6 grid gap-4 xl:grid-cols-3">
+          {aiProviders.items.map((provider) => (
+            <div key={provider.id} className="rounded-[24px] border border-slate-200 bg-white p-5">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold text-ink">{provider.label}</h2>
+                <Badge tone={provider.configured ? "success" : "default"}>
+                  {provider.configured ? "일부 설정됨" : "미설정"}
+                </Badge>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-slate-500">{provider.description}</p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {provider.stages.map((stage) => (
+                  <Badge
+                    key={`${provider.id}-${stage.stage}`}
+                    tone={stage.supported ? (stage.real_available ? "success" : "warning") : "default"}
+                  >
+                    {stage.stage === "script" ? "대본" : stage.stage === "image" ? "이미지" : "비디오"} ·{" "}
+                    {stage.supported ? (stage.real_available ? "실연동 준비" : "mock 우선") : "미지원"}
+                  </Badge>
+                ))}
+              </div>
+              <p className="mt-4 text-xs leading-5 text-slate-500">
+                기본 선택 단계:
+                {" "}
+                {provider.stages
+                  .filter((stage) => stage.default_selected)
+                  .map((stage) => (stage.stage === "script" ? "대본" : stage.stage === "image" ? "이미지" : "비디오"))
+                  .join(", ") || "없음"}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {feedback ? (
         <div className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">

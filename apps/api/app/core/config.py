@@ -22,13 +22,39 @@ class Settings(BaseSettings):
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
 
+    openai_api_key: str | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_model: str | None = None
+    openai_image_model: str | None = None
+    openai_video_model: str | None = None
+
     claude_api_key: str | None = None
     claude_api_url: str = "https://api.anthropic.com/v1/messages"
     claude_api_version: str = "2023-06-01"
     claude_model: str | None = None
     claude_max_tokens: int = 3000
     claude_temperature: float = 0.2
-    script_provider_mode: Literal["mock", "anthropic"] = "mock"
+    script_provider_mode: Literal["mock", "real", "anthropic"] = "mock"
+
+    gemini_api_key: str | None = None
+    gemini_base_url: str = "https://generativelanguage.googleapis.com"
+    gemini_model: str | None = None
+    gemini_image_model: str | None = None
+    gemini_video_model: str | None = None
+
+    kling_api_key: str | None = None
+    kling_base_url: str = "https://api-app-global.klingai.com"
+    kling_video_model: str | None = None
+    kling_submit_path: str | None = None
+    kling_status_path: str | None = None
+    kling_result_path: str | None = None
+
+    script_default_provider: Literal["openai", "claude", "gemini"] = "openai"
+    image_default_provider: Literal["openai", "claude", "gemini"] = "openai"
+    video_default_provider: Literal["openai", "claude", "gemini", "kling"] = "openai"
+    image_provider_mode: Literal["mock", "real"] = "mock"
+    video_provider_mode: Literal["mock", "real"] = "mock"
+
     ecos_api_key: str | None = None
     fred_api_key: str | None = None
     kosis_api_key: str | None = None

@@ -7,6 +7,7 @@ import {
   Download,
   FileText,
   FolderKanban,
+  KeyRound,
   LayoutDashboard,
   Search,
   Settings,
@@ -24,9 +25,9 @@ export const navigationItems = [
   { href: "/character", label: "캐릭터 설정", icon: Bot },
   { href: "/images", label: "이미지 생성", icon: Sparkles },
   { href: "/videos", label: "영상 생성", icon: Clapperboard },
+  { href: "/ai-connections", label: "AI 연결", icon: KeyRound },
   { href: "/review", label: "검수 / 편집", icon: FolderKanban },
   { href: "/downloads", label: "다운로드", icon: Download },
   { href: "/settings", label: "설정", icon: Settings },
   { href: "/jobs", label: "작업 로그", icon: Activity }
 ] as const;
-

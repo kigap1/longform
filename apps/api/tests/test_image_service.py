@@ -109,7 +109,8 @@ class ImageServiceTests(TestCase):
         self.assertEqual(summary.character_profile_id, self.locked_character.id)
         self.assertTrue(summary.project_locked_character)
         self.assertEqual(summary.reference_snapshot_ids, [self.snapshot.id])
-        self.assertEqual(summary.provider_name, "Mock Image Generator")
+        self.assertEqual(summary.provider_id, "openai")
+        self.assertEqual(summary.provider_name, "OpenAI")
         self.assertEqual(summary.scene_title, "환율 오프닝")
         self.assertIn("USD/KRW 캡처", summary.prompt)
 

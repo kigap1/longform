@@ -50,6 +50,12 @@ export type ProjectOption = {
   updatedAt: string;
 };
 
+export type IssueRankPayload = {
+  project_id?: string;
+  category?: string;
+  keywords?: readonly string[];
+};
+
 export type IssueCardViewModel = {
   id: string;
   title: string;
@@ -134,6 +140,39 @@ export type CharacterLibrarySnapshot = {
   }[];
 };
 
+export type AIProviderField = {
+  key: string;
+  label: string;
+  placeholder: string;
+  secret?: boolean;
+  configured?: boolean;
+};
+
+export type AIProviderStageSupport = {
+  stage: "script" | "image" | "video";
+  supported: boolean;
+  mock_available: boolean;
+  real_available: boolean;
+  default_mode: string;
+  note: string;
+  default_selected: boolean;
+};
+
+export type AIProviderItem = {
+  id: "openai" | "claude" | "gemini" | "kling";
+  label: string;
+  description: string;
+  order: number;
+  configured: boolean;
+  fields: readonly AIProviderField[];
+  stages: readonly AIProviderStageSupport[];
+};
+
+export type AIProviderCatalog = {
+  items: readonly AIProviderItem[];
+  defaults: Record<string, string>;
+};
+
 export type SettingsField = {
   category: string;
   key: string;
@@ -166,4 +205,69 @@ export type JobsSnapshot = {
   statuses: readonly string[];
   summary: readonly { label: string; value: string; tone: "default" | "success" | "warning" | "danger" }[];
   items: readonly JobLogItem[];
+};
+
+export type ScriptWorkspace = {
+  scriptId: string;
+  title: string;
+  summary: string;
+  providerId: string;
+  providerName: string;
+  providerMode: string;
+  sections: readonly {
+    id: string;
+    heading: string;
+    content: string;
+    evidences: readonly string[];
+  }[];
+  scenes: readonly {
+    id: string;
+    title: string;
+    description: string;
+    prompt: string;
+    motion: string;
+    evidenceIds: readonly string[];
+  }[];
+  evidences: readonly EvidencePanelItem[];
+};
+
+export type ImageGenerationResult = {
+  id: string;
+  sceneId: string;
+  sceneTitle: string;
+  prompt: string;
+  assetUrl: string;
+  thumbnailUrl: string;
+  status: string;
+  providerId: string;
+  providerName: string;
+  providerMode: string;
+};
+
+export type VideoPreparationResult = {
+  id: string;
+  sceneId: string;
+  sceneTitle: string;
+  prompt: string;
+  motionNotes: string;
+  bundlePath: string;
+  bundleDownloadPath: string;
+  status: string;
+  providerId: string;
+  providerName: string;
+  providerMode: string;
+  jobId: string;
+};
+
+export type VideoExecutionResult = {
+  videoAssetId: string;
+  sceneId: string;
+  status: string;
+  providerId: string;
+  providerName: string;
+  providerMode: string;
+  providerJobId: string;
+  outputPath: string;
+  bundlePath: string;
+  jobId: string;
 };

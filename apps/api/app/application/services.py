@@ -44,6 +44,10 @@ from app.application.schemas.market import (
     SnapshotSummary,
 )
 from app.application.schemas.platform import (
+    AIProviderCatalogResponse,
+    AIProviderFieldSummary,
+    AIProviderStageSupportSummary,
+    AIProviderSummary,
     AppSettingSummary,
     AppSettingsResponse,
     AppSettingUpsertRequest,
@@ -76,6 +80,16 @@ from app.application.schemas.stats import (
     StatisticSeriesPoint,
     StatisticSeriesResponse,
     StatisticSummary,
+)
+from app.application.provider_runtime import (
+    AI_PROVIDER_ORDER,
+    RuntimeSettingsResolver,
+    normalize_provider_id,
+    normalize_provider_mode,
+    provider_description,
+    provider_fields,
+    provider_label,
+    stage_support,
 )
 from app.domain.provider_interfaces import (
     CharacterProfilePayload,
@@ -126,7 +140,7 @@ from app.infrastructure.providers.adapters import (
     SeekingAlphaAdapter,
     YahooFinanceAdapter,
 )
-from app.infrastructure.providers.claude_messages import ClaudeMessagesAPIAdapter, ClaudeMessagesMockAdapter
+from app.infrastructure.providers.generative_ai import build_image_provider, build_script_provider, build_video_provider
 from app.infrastructure.storage.factory import build_storage
 
 
@@ -177,17 +191,11 @@ class ProviderRegistry:
     video_workflow: VideoWorkflowPort
 
 
-def build_provider_registry() -> ProviderRegistry:
-    settings = get_settings()
-    if settings.script_provider_mode == "anthropic":
-        script_model: ScriptModelPort = ClaudeMessagesAPIAdapter(
-            api_key=settings.claude_api_key,
-            api_url=settings.claude_api_url,
-            api_version=settings.claude_api_version,
-            model_name=settings.claude_model or "",
-        )
-    else:
-        script_model = ClaudeMessagesMockAdapter()
+def build_provider_registry(repositories: RepositoryRegistry | None = None) -> ProviderRegistry:
+    runtime = RuntimeSettingsResolver(repositories)
+    script_model = build_script_provider(runtime.default_provider("script"), runtime.default_mode("script"), runtime)
+    image_generator = build_image_provider(runtime.default_provider("image"), runtime.default_mode("image"), runtime)
+    video_workflow = build_video_provider(runtime.default_provider("video"), runtime.default_mode("video"), runtime)
 
     return ProviderRegistry(
         news=[MockKoreanNewsAdapter(), MockGlobalNewsAdapter()],
@@ -195,8 +203,8 @@ def build_provider_registry() -> ProviderRegistry:
         market_data=[YahooFinanceAdapter(), InvestingAdapter(), SeekingAlphaAdapter()],
         snapshot=MockSnapshotAdapter(),
         script_model=script_model,
-        image_generator=MockImageGeneratorAdapter(),
-        video_workflow=MockVeoWorkflowAdapter(),
+        image_generator=image_generator,
+        video_workflow=video_workflow,
     )
 
 
@@ -256,6 +264,48 @@ class SettingsService:
             secret=payload.secret,
         )
         self.repositories.session.commit()
+
+    def ai_provider_catalog(self) -> AIProviderCatalogResponse:
+        runtime = RuntimeSettingsResolver(self.repositories)
+        defaults = {
+            stage: runtime.default_provider(stage)
+            for stage in ("script", "image", "video")
+        }
+        items = []
+        for order, provider_id in enumerate(AI_PROVIDER_ORDER):
+            fields = [
+                AIProviderFieldSummary(
+                    key=str(field["key"]),
+                    label=str(field["label"]),
+                    placeholder=str(field["placeholder"]),
+                    secret=bool(field["secret"]),
+                    configured=runtime.configured(str(field["key"])),
+                )
+                for field in provider_fields(provider_id)
+            ]
+            items.append(
+                AIProviderSummary(
+                    id=provider_id,
+                    label=provider_label(provider_id),
+                    description=provider_description(provider_id),
+                    order=order,
+                    configured=any(field.configured for field in fields),
+                    fields=fields,
+                    stages=[
+                        AIProviderStageSupportSummary(
+                            stage=stage,
+                            supported=bool(stage_support(provider_id, stage)["supported"]),
+                            mock_available=bool(stage_support(provider_id, stage)["mock_available"]),
+                            real_available=bool(stage_support(provider_id, stage)["real_available"]),
+                            default_mode=runtime.default_mode(stage),
+                            note=str(stage_support(provider_id, stage)["note"]),
+                            default_selected=defaults[stage] == provider_id,
+                        )
+                        for stage in ("script", "image", "video")
+                    ],
+                )
+            )
+        return AIProviderCatalogResponse(items=items, defaults=defaults)
 
 
 @dataclass(slots=True)
@@ -834,13 +884,20 @@ class ScriptService:
     repositories: RepositoryRegistry
     providers: ProviderRegistry
 
+    def latest(self, project_id: str) -> ScriptSummary | None:
+        project = _resolve_project(self.repositories, project_id)
+        script = self.repositories.scripts.latest_by_project(project.id)
+        if script is None:
+            return None
+        return self._summary_from_saved_script(script, project.id)
+
     def generate(self, payload: ScriptGenerationRequest) -> ScriptSummary:
         project = _resolve_project(self.repositories, payload.project_id)
         issue = self.repositories.issues.get(payload.issue_id)
         issue_title = issue.title if issue else payload.issue_id
         issue_summary = payload.issue_summary or (issue.summary if issue else f"{issue_title} 관련 이슈 해설")
-        script_model = self._script_model_for_mode(payload.provider_mode)
-        model_name = self._resolve_model_name(payload.model_override, script_model)
+        provider_id, provider_mode, script_model = self._select_script_provider(payload.provider_id, payload.provider_mode)
+        model_name = self._resolve_model_name(payload.model_override, provider_id, script_model)
         verified_statistics, market_context = self._resolve_script_evidence_context(project.id, payload)
         prompt_build = build_script_generation_prompt(
             issue_title=issue_title,
@@ -895,8 +952,9 @@ class ScriptService:
             input_tokens=generated.input_tokens,
             output_tokens=generated.output_tokens,
             evidence_mappings=generated.evidence_mappings,
+            provider_id=provider_id,
             provider_name=script_model.provider_name,
-            provider_mode=script_model.mode,
+            provider_mode=provider_mode,
         )
         script = self.repositories.scripts.create(
             project_id=project.id,
@@ -928,8 +986,9 @@ class ScriptService:
             tone=payload.tone,
             audience_type=payload.audience_type,
             evidence_mappings=generated.evidence_mappings,
+            provider_id=provider_id,
             provider_name=script_model.provider_name,
-            provider_mode=script_model.mode,
+            provider_mode=provider_mode,
         )
         self.repositories.revisions.create(
             project_id=project.id,
@@ -951,14 +1010,20 @@ class ScriptService:
         if target is None:
             raise ValueError(f"Script section not found: {payload.section_id}")
 
-        script_model = self._script_model_for_mode(payload.provider_mode)
         script_snapshot = script.prompt_snapshot or {}
+        snapshot_provider = script_snapshot.get("provider", {}) if isinstance(script_snapshot, dict) else {}
+        fallback_provider_id = normalize_provider_id(snapshot_provider.get("id"), "openai")
+        provider_id, provider_mode, script_model = self._select_script_provider(
+            payload.provider_id,
+            payload.provider_mode,
+            fallback_provider_id=fallback_provider_id,
+        )
         script_request = script_snapshot.get("request", {})
         script_result = script_snapshot.get("result", {})
         style_preset = payload.style_preset or script_request.get("style_preset", "설명형")
         tone = payload.tone or script_request.get("tone", "차분한 분석형")
         audience_type = payload.audience_type or script_request.get("audience_type", "대중")
-        model_name = self._resolve_model_name(payload.model_override, script_model)
+        model_name = self._resolve_model_name(payload.model_override, provider_id, script_model)
 
         verified_statistics, market_context = self._resolve_existing_script_evidence(script.project_id, sections)
         prompt_build = build_section_regeneration_prompt(
@@ -1052,8 +1117,9 @@ class ScriptService:
             input_tokens=None,
             output_tokens=None,
             evidence_mappings=combined_evidence_mappings,
+            provider_id=provider_id,
             provider_name=script_model.provider_name,
-            provider_mode=script_model.mode,
+            provider_mode=provider_mode,
         )
         updated_script = self.repositories.scripts.update(
             script_id=script.id,
@@ -1080,8 +1146,9 @@ class ScriptService:
             tone=tone,
             audience_type=audience_type,
             evidence_mappings=combined_evidence_mappings,
+            provider_id=provider_id,
             provider_name=script_model.provider_name,
-            provider_mode=script_model.mode,
+            provider_mode=provider_mode,
         )
         self.repositories.revisions.create(
             project_id=script.project_id,
@@ -1094,31 +1161,32 @@ class ScriptService:
         self.repositories.session.commit()
         return RegenerateSectionResponse(script_id=script.id, version_number=next_version, section=revision_section)
 
-    def _script_model_for_mode(self, requested_mode: str | None) -> ScriptModelPort:
-        normalized = (requested_mode or "").strip().lower()
-        if not normalized:
-            return self.providers.script_model
-        if normalized == "mock":
-            if self.providers.script_model.mode == "mock":
-                return self.providers.script_model
-            return ClaudeMessagesMockAdapter()
-        if normalized in {"anthropic", "real"}:
-            if self.providers.script_model.mode == "real":
-                return self.providers.script_model
-            settings = get_settings()
-            return ClaudeMessagesAPIAdapter(
-                api_key=settings.claude_api_key,
-                api_url=settings.claude_api_url,
-                api_version=settings.claude_api_version,
-                model_name=settings.claude_model or "",
-            )
-        raise ValueError(f"Unsupported script provider mode: {requested_mode}")
+    def _select_script_provider(
+        self,
+        requested_provider_id: str | None,
+        requested_mode: str | None,
+        *,
+        fallback_provider_id: str | None = None,
+    ) -> tuple[str, str, ScriptModelPort]:
+        runtime = RuntimeSettingsResolver(self.repositories)
+        provider_id = normalize_provider_id(
+            requested_provider_id,
+            normalize_provider_id(fallback_provider_id, runtime.default_provider("script")),
+        )
+        provider_mode = normalize_provider_mode(requested_mode, runtime.default_mode("script"))
+        return provider_id, provider_mode, build_script_provider(provider_id, provider_mode, runtime)
 
-    def _resolve_model_name(self, override: str | None, script_model: ScriptModelPort) -> str:
-        settings = get_settings()
-        if script_model.mode == "real" and not (override or settings.claude_model):
-            raise ValueError("CLAUDE_MODEL is required when SCRIPT_PROVIDER_MODE=anthropic.")
-        return override or settings.claude_model or "claude-messages-mock"
+    def _resolve_model_name(self, override: str | None, provider_id: str, script_model: ScriptModelPort) -> str:
+        runtime = RuntimeSettingsResolver(self.repositories)
+        model_keys = {
+            "openai": "openai_model",
+            "claude": "claude_model",
+            "gemini": "gemini_model",
+        }
+        configured = runtime.get(model_keys.get(provider_id, "claude_model"))
+        if script_model.mode == "real" and not (override or configured):
+            raise ValueError(f"{provider_label(normalize_provider_id(provider_id))} 모델 설정이 필요합니다.")
+        return override or configured or f"{provider_id}-script-mock"
 
     def _resolve_script_evidence_context(
         self,
@@ -1371,6 +1439,7 @@ class ScriptService:
         input_tokens: int | None,
         output_tokens: int | None,
         evidence_mappings,
+        provider_id: str,
         provider_name: str,
         provider_mode: str,
     ) -> dict:
@@ -1380,6 +1449,7 @@ class ScriptService:
         return {
             "request": request_payload,
             "provider": {
+                "id": provider_id,
                 "name": provider_name,
                 "mode": provider_mode,
                 "model": provider_model,
@@ -1415,6 +1485,7 @@ class ScriptService:
         tone: str,
         audience_type: str,
         evidence_mappings,
+        provider_id: str,
         provider_name: str,
         provider_mode: str,
     ) -> ScriptSummary:
@@ -1486,6 +1557,7 @@ class ScriptService:
             body=script.body,
             conclusion=script.conclusion,
             version_number=script.version_number,
+            provider_id=provider_id,
             provider_name=provider_name,
             provider_mode=provider_mode,
             style_preset=style_preset,
@@ -1504,6 +1576,26 @@ class ScriptService:
             scenes=scene_summaries,
             evidence_mappings=mapping_summaries,
             evidences=[_to_evidence_reference(item) for item in script_evidences],
+        )
+
+    def _summary_from_saved_script(self, script: models.Script, project_id: str) -> ScriptSummary:
+        prompt_snapshot = script.prompt_snapshot or {}
+        request_payload = prompt_snapshot.get("request", {}) if isinstance(prompt_snapshot, dict) else {}
+        provider_payload = prompt_snapshot.get("provider", {}) if isinstance(prompt_snapshot, dict) else {}
+        result_payload = prompt_snapshot.get("result", {}) if isinstance(prompt_snapshot, dict) else {}
+        evidence_mappings = result_payload.get("evidence_mappings") or prompt_snapshot.get("evidence_mappings", [])
+        provider_id = normalize_provider_id(provider_payload.get("id"), "openai")
+        return self._script_summary(
+            script=script,
+            issue_id=script.issue_id,
+            project_id=project_id,
+            style_preset=request_payload.get("style_preset", ""),
+            tone=request_payload.get("tone", ""),
+            audience_type=request_payload.get("audience_type", ""),
+            evidence_mappings=evidence_mappings,
+            provider_id=provider_id,
+            provider_name=provider_payload.get("name", provider_label(provider_id)),
+            provider_mode=provider_payload.get("mode", "mock"),
         )
 
 
@@ -1568,6 +1660,7 @@ class ImageService:
         scene = self._resolve_scene(project.id, payload.scene_id)
         character, project_locked = self._resolve_character(project.id, payload.character_profile_id)
         snapshots = self._resolve_snapshots(project.id, payload.reference_snapshot_ids)
+        provider_id, provider_mode, image_provider = self._select_image_provider(payload.provider_id, payload.provider_mode)
         layout_input = self._resolve_layout_input(scene, payload.layout)
         latest_image = self.repositories.assets.latest_image_for_scene(scene.id)
         scene_request = SceneImageGenerationRequestPayload(
@@ -1601,9 +1694,9 @@ class ImageService:
         )
         image_version = len(self.repositories.assets.list_images_for_scene(scene.id)) + 1
         generated = (
-            self.providers.image_generator.edit_image(provider_request)
+            image_provider.edit_image(provider_request)
             if regenerate and latest_image is not None
-            else self.providers.image_generator.generate_image(provider_request)
+            else image_provider.generate_image(provider_request)
         )
         revision_note = "scene regeneration" if regenerate else "initial scene generation"
         asset = self.repositories.assets.create_image(
@@ -1612,7 +1705,7 @@ class ImageService:
             asset_url=generated.asset_url,
             thumbnail_url=generated.thumbnail_url,
             status="ready",
-            provider_name=self.providers.image_generator.provider_name,
+            provider_name=image_provider.provider_name,
             revision_note=revision_note,
         )
         job = self.repositories.jobs.create(
@@ -1625,6 +1718,8 @@ class ImageService:
                 "project_locked_character": project_locked,
                 "reference_snapshot_ids": payload.reference_snapshot_ids,
                 "mode": "regenerate" if regenerate else "generate",
+                "provider_id": provider_id,
+                "provider_mode": provider_mode,
             },
             result={"image_asset_id": asset.id},
         )
@@ -1643,8 +1738,9 @@ class ImageService:
                 "scene_id": scene.id,
                 "scene_title": scene.title,
                 "prompt": asset.prompt,
-                "provider_name": self.providers.image_generator.provider_name,
-                "provider_mode": self.providers.image_generator.mode,
+                "provider_id": provider_id,
+                "provider_name": image_provider.provider_name,
+                "provider_mode": provider_mode,
                 "character_profile_id": character.id,
                 "character_name": character.name,
                 "project_locked_character": project_locked,
@@ -1666,7 +1762,9 @@ class ImageService:
             asset_url=asset.asset_url,
             thumbnail_url=asset.thumbnail_url,
             status=asset.status,
+            provider_id=provider_id,
             provider_name=asset.provider_name,
+            provider_mode=provider_mode,
             character_profile_id=character.id,
             character_name=character.name,
             project_locked_character=project_locked,
@@ -1674,6 +1772,16 @@ class ImageService:
             layout=layout_input,
             revision_note=asset.revision_note,
         )
+
+    def _select_image_provider(
+        self,
+        requested_provider_id: str | None,
+        requested_mode: str | None,
+    ) -> tuple[str, str, ImageGenerationPort]:
+        runtime = RuntimeSettingsResolver(self.repositories)
+        provider_id = normalize_provider_id(requested_provider_id, runtime.default_provider("image"))
+        provider_mode = normalize_provider_mode(requested_mode, runtime.default_mode("image"))
+        return provider_id, provider_mode, build_image_provider(provider_id, provider_mode, runtime)
 
     def _resolve_scene(self, project_id: str, scene_id: str) -> models.Scene:
         scene = self.repositories.scenes.get(scene_id)
@@ -1764,6 +1872,7 @@ class VideoService:
 
     def prepare(self, payload: VideoPrepareRequest) -> list[VideoAssetSummary]:
         project = _resolve_project(self.repositories, payload.project_id)
+        provider_id, provider_mode, video_provider = self._select_video_provider(payload.provider_id, payload.provider_mode)
         job = self.repositories.jobs.create(
             project_id=project.id,
             job_type="video_preparation",
@@ -1771,6 +1880,8 @@ class VideoService:
             payload={
                 "scene_ids": payload.scene_ids,
                 "vertical_instructions": payload.vertical_instructions.model_dump(mode="json"),
+                "provider_id": provider_id,
+                "provider_mode": provider_mode,
             },
             result={},
         )
@@ -1800,14 +1911,14 @@ class VideoService:
                 prompt=prompt_build.prompt,
                 motion_notes=prompt_build.motion_notes,
             )
-            prepared = self.providers.video_workflow.prepare_scene(request)
+            prepared = video_provider.prepare_scene(request)
             asset = self.repositories.assets.create_video(
                 scene_id=scene.id,
                 prompt=prompt_build.prompt,
                 motion_notes=prepared.motion_notes,
                 bundle_path=prepared.bundle_path,
                 status="ready",
-                provider_name=self.providers.video_workflow.provider_name,
+                provider_name=video_provider.provider_name,
             )
             self.repositories.revisions.create(
                 project_id=project.id,
@@ -1823,8 +1934,9 @@ class VideoService:
                     "motion_notes": asset.motion_notes,
                     "bundle_path": asset.bundle_path,
                     "vertical_instructions": payload.vertical_instructions.model_dump(mode="json"),
-                    "provider_name": self.providers.video_workflow.provider_name,
-                    "provider_mode": self.providers.video_workflow.mode,
+                    "provider_id": provider_id,
+                    "provider_name": video_provider.provider_name,
+                    "provider_mode": provider_mode,
                 },
                 change_note="장면별 영상 준비 번들 생성",
             )
@@ -1839,6 +1951,8 @@ class VideoService:
                     scene=scene,
                     image_asset=latest_image,
                     vertical_instructions=payload.vertical_instructions,
+                    provider_id=provider_id,
+                    provider_mode=provider_mode,
                     job_id=job.id,
                 )
             )
@@ -1850,17 +1964,22 @@ class VideoService:
 
     def execute(self, payload: VideoExecutionRequest) -> list[VideoExecutionSummary]:
         project = _resolve_project(self.repositories, payload.project_id)
+        provider_id, provider_mode, video_provider = self._select_video_provider(payload.provider_id, payload.provider_mode)
         job = self.repositories.jobs.create(
             project_id=project.id,
             job_type="video_execution",
             status="running",
-            payload={"video_asset_ids": payload.video_asset_ids},
+            payload={
+                "video_asset_ids": payload.video_asset_ids,
+                "provider_id": provider_id,
+                "provider_mode": provider_mode,
+            },
             result={},
         )
         results: list[VideoExecutionSummary] = []
         for asset in self.repositories.assets.get_many_videos(payload.video_asset_ids):
             scene = self._resolve_scene(project.id, asset.scene_id)
-            execution = self.providers.video_workflow.execute_bundle(
+            execution = video_provider.execute_bundle(
                 VideoExecutionRequestPayload(
                     project_id=project.id,
                     video_asset_id=asset.id,
@@ -1876,8 +1995,9 @@ class VideoService:
                     "scene_id": scene.id,
                     "scene_title": scene.title,
                     "bundle_path": asset.bundle_path,
-                    "provider_name": self.providers.video_workflow.provider_name,
-                    "provider_mode": self.providers.video_workflow.mode,
+                    "provider_id": provider_id,
+                    "provider_name": video_provider.provider_name,
+                    "provider_mode": provider_mode,
                     "provider_job_id": execution.provider_job_id,
                     "status": execution.status,
                 },
@@ -1892,6 +2012,7 @@ class VideoService:
                     "scene_id": scene.id,
                     "bundle_path": asset.bundle_path,
                     "output_path": output_path,
+                    "provider_id": provider_id,
                     "provider_job_id": execution.provider_job_id,
                     "status": execution.status,
                 },
@@ -1907,8 +2028,9 @@ class VideoService:
                     video_asset_id=asset.id,
                     scene_id=scene.id,
                     status=execution.status,
-                    provider_name=self.providers.video_workflow.provider_name,
-                    provider_mode=self.providers.video_workflow.mode,
+                    provider_id=provider_id,
+                    provider_name=video_provider.provider_name,
+                    provider_mode=provider_mode,
                     provider_job_id=execution.provider_job_id,
                     output_path=output_path,
                     bundle_path=asset.bundle_path,
@@ -1997,6 +2119,8 @@ class VideoService:
         scene: models.Scene,
         image_asset: models.ImageAsset | None,
         vertical_instructions: VerticalVideoInstructionsInput,
+        provider_id: str,
+        provider_mode: str,
         job_id: str,
     ) -> VideoAssetSummary:
         return VideoAssetSummary(
@@ -2009,8 +2133,9 @@ class VideoService:
             bundle_path=asset.bundle_path,
             bundle_download_path=f"/api/videos/bundles/{asset.id}?project_id={scene.project_id}",
             status=asset.status,
+            provider_id=provider_id,
             provider_name=asset.provider_name,
-            provider_mode=self.providers.video_workflow.mode,
+            provider_mode=provider_mode,
             vertical_instructions=vertical_instructions,
             job_id=job_id,
         )
@@ -2018,7 +2143,7 @@ class VideoService:
     def _to_vertical_video_instructions(
         self,
         payload: VerticalVideoInstructionsInput,
-    ) -> VerticalVideoInstructionsPayload:
+        ) -> VerticalVideoInstructionsPayload:
         return VerticalVideoInstructionsPayload(
             aspect_ratio=payload.aspect_ratio,
             duration_seconds=payload.duration_seconds,
@@ -2027,6 +2152,16 @@ class VideoService:
             pacing=payload.pacing,
             motion_emphasis=payload.motion_emphasis,
         )
+
+    def _select_video_provider(
+        self,
+        requested_provider_id: str | None,
+        requested_mode: str | None,
+    ) -> tuple[str, str, VideoWorkflowPort]:
+        runtime = RuntimeSettingsResolver(self.repositories)
+        provider_id = normalize_provider_id(requested_provider_id, runtime.default_provider("video"))
+        provider_mode = normalize_provider_mode(requested_mode, runtime.default_mode("video"))
+        return provider_id, provider_mode, build_video_provider(provider_id, provider_mode, runtime)
 
 
 @dataclass(slots=True)
@@ -2083,7 +2218,7 @@ class ServiceBundle:
 
 def build_service_bundle(session: Session) -> ServiceBundle:
     repositories = RepositoryRegistry(session)
-    providers = build_provider_registry()
+    providers = build_provider_registry(repositories)
     return ServiceBundle(
         projects=ProjectService(repositories),
         settings=SettingsService(repositories),

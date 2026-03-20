@@ -107,6 +107,10 @@ class IssueRepository:
             self.session.add(issue)
             self.session.flush()
             for article in card["related_articles"]:
+                raw_payload = dict(article)
+                published_at = raw_payload.get("published_at")
+                if isinstance(published_at, datetime):
+                    raw_payload["published_at"] = published_at.isoformat()
                 self.session.add(
                     models.Article(
                         issue_id=issue.id,
@@ -116,7 +120,7 @@ class IssueRepository:
                         published_at=article["published_at"],
                         summary=article["summary"],
                         credibility_score=article.get("credibility_score", 0.7),
-                        raw_payload=article,
+                        raw_payload=raw_payload,
                     )
                 )
             created.append(issue)
@@ -305,6 +309,16 @@ class ScriptRepository:
             select(models.Script)
             .where(models.Script.id == script_id)
             .options(selectinload(models.Script.sections))
+        )
+        return self.session.scalar(stmt)
+
+    def latest_by_project(self, project_id: str) -> models.Script | None:
+        stmt = (
+            select(models.Script)
+            .where(models.Script.project_id == project_id)
+            .options(selectinload(models.Script.sections))
+            .order_by(desc(models.Script.created_at))
+            .limit(1)
         )
         return self.session.scalar(stmt)
 

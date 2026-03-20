@@ -5,7 +5,12 @@ type PageHeaderProps = {
   eyebrow: string;
   title: string;
   description: string;
-  actions?: { label: string; variant?: "primary" | "secondary" | "ghost" }[];
+  actions?: {
+    label: string;
+    variant?: "primary" | "secondary" | "ghost";
+    onClick?: () => void;
+    disabled?: boolean;
+  }[];
 };
 
 export function PageHeader({ eyebrow, title, description, actions = [] }: PageHeaderProps) {
@@ -20,7 +25,7 @@ export function PageHeader({ eyebrow, title, description, actions = [] }: PageHe
       {actions.length > 0 ? (
         <div className="flex flex-wrap items-center gap-3">
           {actions.map((action) => (
-            <Button key={action.label} variant={action.variant}>
+            <Button key={action.label} variant={action.variant} onClick={action.onClick} disabled={action.disabled}>
               {action.label}
             </Button>
           ))}
@@ -29,4 +34,3 @@ export function PageHeader({ eyebrow, title, description, actions = [] }: PageHe
     </div>
   );
 }
-
