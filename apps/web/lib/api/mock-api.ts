@@ -1,30 +1,39 @@
 import {
-  dashboardMetrics,
   dashboardTabs,
   evidenceItems,
   filterPresets,
-  issueCards,
-  jobLogs,
   marketRows,
-  projects,
   scenes,
   scriptSections,
   settingsSections,
   snapshots as snapshotSeed,
   statisticsRows
 } from "@/lib/mock-data";
-import type { SnapshotCapturePayload, SnapshotLibraryResponse, SnapshotSummary } from "@/lib/api/types";
+import type {
+  CreateProjectPayload,
+  SnapshotCapturePayload,
+  SnapshotLibraryResponse,
+  SnapshotSummary,
+  WorkspaceSearchResult
+} from "@/lib/api/types";
+import {
+  createMockProject,
+  getMockDashboardSnapshot,
+  getMockIssueDiscoverySnapshot,
+  getMockJobsSnapshot,
+  listMockProjects,
+  rankMockIssues,
+  searchMockWorkspace
+} from "@/lib/mock-studio-engine";
 
 
-export type ProjectOption = (typeof projects)[number];
+export type ProjectOption = Awaited<ReturnType<typeof listMockProjects>>[number];
 export type DashboardTab = (typeof dashboardTabs)[number];
-export type IssueCard = (typeof issueCards)[number];
 export type StatisticRow = (typeof statisticsRows)[number];
 export type MarketRow = (typeof marketRows)[number];
 export type SnapshotItem = SnapshotSummary;
 export type ScriptSection = (typeof scriptSections)[number];
 export type SceneItem = (typeof scenes)[number];
-export type JobLogItem = (typeof jobLogs)[number];
 export type EvidenceItem = (typeof evidenceItems)[number];
 export type SettingsSection = (typeof settingsSections)[number];
 
@@ -39,30 +48,31 @@ let snapshotStore: SnapshotSummary[] = snapshotSeed.map(cloneSnapshot);
 
 export async function getProjects() {
   await delay();
-  return [...projects];
+  return listMockProjects();
 }
 
-export async function getDashboardSnapshot() {
+export async function createProject(payload: CreateProjectPayload) {
   await delay();
-  return {
-    metrics: [...dashboardMetrics],
-    tabs: [...dashboardTabs],
-    issues: [...issueCards],
-    evidences: [...evidenceItems],
-    jobs: [...jobLogs]
-  };
+  return createMockProject(payload);
 }
 
-export async function getIssueDiscoverySnapshot() {
+export async function getDashboardSnapshot(projectId?: string) {
   await delay();
-  return {
-    filters: filterPresets.issueCategories,
-    items: [...issueCards],
-    groups: [
-      { title: "미국 금리 이슈 기사 14건", detail: "연합뉴스, Reuters, Bloomberg, WSJ 기사 묶음" },
-      { title: "중동 물류 리스크 기사 11건", detail: "유가, 해상 운임, 공급망 태그 자동 연결" }
-    ]
-  };
+  return getMockDashboardSnapshot(projectId);
+}
+
+export async function getIssueDiscoverySnapshot(projectId?: string) {
+  await delay();
+  return getMockIssueDiscoverySnapshot(projectId);
+}
+
+export async function rankIssues(payload: {
+  project_id?: string;
+  keywords?: readonly string[];
+  user_instructions?: string;
+}) {
+  await delay();
+  return rankMockIssues(payload);
 }
 
 export async function getStatisticsSnapshot() {
@@ -189,13 +199,14 @@ export async function getSettingsSnapshot() {
   };
 }
 
-export async function getJobsSnapshot() {
+export async function getJobsSnapshot(projectId?: string) {
   await delay();
-  return {
-    statuses: filterPresets.jobStatuses,
-    summary: [...jobSummary],
-    items: [...jobLogs]
-  };
+  return getMockJobsSnapshot(projectId);
+}
+
+export async function searchWorkspace(projectId: string | undefined, query: string): Promise<WorkspaceSearchResult[]> {
+  await delay(80);
+  return searchMockWorkspace(projectId, query);
 }
 
 function cloneSnapshot(snapshot: SnapshotSummary): SnapshotSummary {

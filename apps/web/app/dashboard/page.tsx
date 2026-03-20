@@ -11,6 +11,7 @@ import { SectionCard } from "@/components/shared/section-card";
 import { Tabs } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { useDashboardQuery } from "@/lib/api/hooks";
+import { OPEN_PROJECT_CREATOR_EVENT } from "@/lib/project-events";
 import { useProjectStore } from "@/lib/stores/project-store";
 
 
@@ -29,7 +30,14 @@ export default function DashboardPage() {
         eyebrow="운영 개요"
         title="콘텐츠 파이프라인 대시보드"
         description="이슈 우선순위, 근거 확보 상태, 생성 작업 진행 상황을 한 화면에서 확인합니다."
-        actions={[{ label: "새 프로젝트", variant: "primary" }, { label: "근거 리포트 보기", variant: "secondary" }]}
+        actions={[
+          {
+            label: "새 프로젝트",
+            variant: "primary",
+            onClick: () => window.dispatchEvent(new Event(OPEN_PROJECT_CREATOR_EVENT))
+          },
+          { label: "근거 리포트 보기", variant: "secondary" }
+        ]}
       />
 
       <div className="mb-6">

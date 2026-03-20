@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from html import escape
-from urllib.parse import urlparse
+from email.utils import parsedate_to_datetime
+from html import escape, unescape
+import re
+from urllib.parse import quote_plus, urlparse
+from xml.etree import ElementTree
+
+import httpx
 
 from app.domain.enums import IssueCategory
 from app.domain.provider_interfaces import (
@@ -48,6 +53,148 @@ def _matches_keyword(keyword: str, values: list[str]) -> bool:
     return any(normalized_keyword in _normalize(value) or _normalize(value) in normalized_keyword for value in values)
 
 
+def _google_news_search_url(query: str) -> str:
+    return f"https://news.google.com/search?q={quote_plus(query)}"
+
+
+def _strip_html(value: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", unescape(value or ""))
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _normalize_source_name(source_name: str) -> str:
+    return re.sub(r"\s+", " ", source_name).strip()
+
+
+def _credibility_for_source(source_name: str) -> float:
+    normalized = _normalize_source_name(source_name).lower()
+    if any(name in normalized for name in ("reuters", "bloomberg", "wsj", "financial times")):
+        return 0.93
+    if any(name in normalized for name in ("연합뉴스", "연합인포맥스", "한국경제", "매일경제", "서울경제", "조선비즈")):
+        return 0.86
+    if any(name in normalized for name in ("nikkei", "니혼게이자이", "cnbc", "marketwatch", "ap")):
+        return 0.88
+    return 0.76
+
+
+def _category_from_text(text: str) -> IssueCategory:
+    normalized = text.lower()
+    if any(token in normalized for token in ("oil", "유가", "중동", "shipping", "red sea", "brent", "wti")):
+        return IssueCategory.GEOPOLITICS
+    if any(
+        token in normalized
+        for token in ("china", "중국", "export", "수출", "semiconductor", "property", "부동산", "tech", "yield", "나스닥", "장기금리", "ai")
+    ):
+        return IssueCategory.INVESTING
+    return IssueCategory.ECONOMY
+
+
+def _parse_google_news_item(item: ElementTree.Element) -> NewsArticlePayload | None:
+    raw_title = (item.findtext("title") or "").strip()
+    link = (item.findtext("link") or "").strip()
+    pub_date = (item.findtext("pubDate") or "").strip()
+    description = _strip_html(item.findtext("description") or "")
+    source_name = _normalize_source_name((item.findtext("source") or "").strip())
+
+    if not raw_title or not link:
+        return None
+
+    title = raw_title
+    if " - " in raw_title:
+        title, trailing_source = raw_title.rsplit(" - ", 1)
+        if not source_name:
+            source_name = _normalize_source_name(trailing_source)
+
+    try:
+        published_at = parsedate_to_datetime(pub_date) if pub_date else datetime.now(timezone.utc)
+    except (TypeError, ValueError):
+        published_at = datetime.now(timezone.utc)
+
+    summary = description or title
+    if not source_name:
+        source_name = "Google 뉴스"
+
+    return NewsArticlePayload(
+        title=title.strip(),
+        source_name=source_name,
+        published_at=published_at.astimezone(timezone.utc),
+        url=link,
+        summary=summary,
+        category=_category_from_text(f"{title} {summary}"),
+        credibility_score=_credibility_for_source(source_name),
+    )
+
+
+def _build_google_news_queries(keyword: str | None, defaults: tuple[str, ...]) -> list[str]:
+    custom_queries: list[str] = []
+    if keyword:
+        tokens = [part.strip() for part in re.split(r"[,/|]", keyword) if part.strip()]
+        if tokens:
+            custom_queries.append(" OR ".join(tokens[:4]))
+
+    seen: set[str] = set()
+    queries: list[str] = []
+    for query in [*custom_queries, *defaults]:
+        normalized = query.lower().strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        queries.append(query)
+    return queries
+
+
+@dataclass(slots=True)
+class GoogleNewsRssAdapter(NewsProviderPort):
+    provider_name: str = "Google News RSS"
+    language: str = "ko"
+    market: str = "KR"
+    ceid: str = "KR:ko"
+    default_queries: tuple[str, ...] = (
+        "금리 OR 환율 OR FOMC when:2d",
+        "중동 OR 유가 OR 해상 물류 when:2d",
+        "중국 경기 OR 한국 수출 OR 반도체 when:2d",
+        "미국 장기금리 OR 나스닥 OR AI주 when:2d",
+    )
+    max_queries: int = 4
+    max_items: int = 20
+    timeout_seconds: float = 4.0
+
+    def fetch_latest(self, keyword: str | None = None) -> list[NewsArticlePayload]:
+        allow_custom_query = not (self.language.startswith("en") and keyword and re.search(r"[가-힣]", keyword))
+        queries = _build_google_news_queries(keyword if allow_custom_query else None, self.default_queries)[: self.max_queries]
+        if not queries:
+            return []
+
+        collected: dict[str, NewsArticlePayload] = {}
+        headers = {"User-Agent": "FactStudio/0.1 (+https://news.google.com/)"}
+
+        with httpx.Client(
+            timeout=self.timeout_seconds,
+            follow_redirects=True,
+            headers=headers,
+        ) as client:
+            for query in queries:
+                url = (
+                    f"https://news.google.com/rss/search?q={quote_plus(query)}"
+                    f"&hl={self.language}&gl={self.market}&ceid={self.ceid}"
+                )
+                try:
+                    response = client.get(url)
+                    response.raise_for_status()
+                    root = ElementTree.fromstring(response.text)
+                except (httpx.HTTPError, ElementTree.ParseError):
+                    continue
+
+                for item in root.findall("./channel/item"):
+                    article = _parse_google_news_item(item)
+                    if article is None:
+                        continue
+                    key = f"{article.title.lower()}::{article.source_name.lower()}"
+                    collected.setdefault(key, article)
+
+        return sorted(collected.values(), key=lambda item: item.published_at, reverse=True)[: self.max_items]
+
+
 @dataclass(slots=True)
 class MockKoreanNewsAdapter(NewsProviderPort):
     provider_name: str = "국내 뉴스 모의 제공자"
@@ -60,7 +207,7 @@ class MockKoreanNewsAdapter(NewsProviderPort):
                 title="미국 금리 인하 기대에 원화 변동성 확대",
                 source_name="연합뉴스",
                 published_at=now,
-                url="https://example.com/news/kr-1",
+                url=_google_news_search_url("미국 금리 인하 기대 원화 변동성 연합뉴스"),
                 summary="환율과 외국인 자금 흐름이 함께 주목받고 있습니다.",
                 category=IssueCategory.ECONOMY,
                 credibility_score=0.9,
@@ -69,7 +216,7 @@ class MockKoreanNewsAdapter(NewsProviderPort):
                 title="원·달러 환율 상승, 증시 외국인 수급 압박",
                 source_name="한국경제",
                 published_at=now,
-                url="https://example.com/news/kr-2",
+                url=_google_news_search_url("원 달러 환율 상승 증시 외국인 수급 압박 한국경제"),
                 summary="금리 기대 변화가 환율과 위험자산에 동시에 반영되고 있습니다.",
                 category=IssueCategory.INVESTING,
                 credibility_score=0.83,
@@ -78,7 +225,7 @@ class MockKoreanNewsAdapter(NewsProviderPort):
                 title="중동 해상 리스크에 국제유가 반등",
                 source_name="매일경제",
                 published_at=now,
-                url="https://example.com/news/kr-3",
+                url=_google_news_search_url("중동 해상 리스크 국제유가 반등 매일경제"),
                 summary="지정학 긴장으로 에너지 가격 불확실성이 커졌습니다.",
                 category=IssueCategory.GEOPOLITICS,
                 credibility_score=0.82,
@@ -98,7 +245,7 @@ class MockGlobalNewsAdapter(NewsProviderPort):
                 title="Fed easing bets ripple through Asian FX markets",
                 source_name="Reuters",
                 published_at=now,
-                url="https://example.com/news/global-1",
+                url=_google_news_search_url("Fed easing bets ripple through Asian FX markets Reuters"),
                 summary="Asian currencies react to shifting rate expectations.",
                 category=IssueCategory.ECONOMY,
                 credibility_score=0.91,
@@ -107,7 +254,7 @@ class MockGlobalNewsAdapter(NewsProviderPort):
                 title="Oil rebounds as shipping security concerns rise in Middle East",
                 source_name="Bloomberg",
                 published_at=now,
-                url="https://example.com/news/global-2",
+                url=_google_news_search_url("Oil rebounds shipping security concerns Middle East Bloomberg"),
                 summary="Crude prices pick up as supply concerns return.",
                 category=IssueCategory.GEOPOLITICS,
                 credibility_score=0.88,
@@ -116,7 +263,7 @@ class MockGlobalNewsAdapter(NewsProviderPort):
                 title="China property weakness clouds Korea export outlook",
                 source_name="WSJ",
                 published_at=now,
-                url="https://example.com/news/global-3",
+                url=_google_news_search_url("China property weakness clouds Korea export outlook WSJ"),
                 summary="Korean exporters face slower demand from China.",
                 category=IssueCategory.INVESTING,
                 credibility_score=0.85,

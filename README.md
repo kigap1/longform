@@ -109,6 +109,8 @@ pnpm test:api
 pnpm check
 ```
 
+- `pnpm dev:api`, `pnpm test:api` 는 `apps/api/.venv` 가 있으면 해당 Python을 우선 사용합니다.
+
 ## 테스트
 
 기본 검증은 백엔드 서비스 테스트와 스모크 테스트를 포함합니다.
@@ -191,7 +193,6 @@ pnpm build:web
 - 스냅샷은 metadata + 저장소 + preview 라우트까지 구현되었지만, 실제 브라우저 자동 캡처는 아직 stub adapter 입니다
 - 대본/이미지/비디오 화면은 생성 액션은 연결되었지만, 장기적으로는 목록 조회와 버전 브라우징 API를 더 보강해야 합니다
 - 로컬 저장소는 기본적으로 절대 파일 경로를 저장하고, S3 preview URL 생성은 아직 구현되지 않았습니다
-- Next.js `snapshots` 페이지는 현재 `<img>` 태그를 사용해서 빌드 시 비차단 경고가 남습니다
 
 ## 다음 프로덕션 단계
 

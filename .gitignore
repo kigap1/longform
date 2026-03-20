@@ -13,7 +13,7 @@ __pycache__
 dist
 build
 coverage
-storage/
+/storage/
 factstudio.db
 *.pyc
 *.pyo

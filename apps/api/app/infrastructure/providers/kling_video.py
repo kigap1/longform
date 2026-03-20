@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
@@ -21,6 +22,14 @@ def _resolve_url(base_url: str, path: str) -> str:
     return urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
 
 
+def _is_retryable_submit_error(error: Exception) -> bool:
+    if isinstance(error, (ConnectionResetError, ConnectionRefusedError, TimeoutError, OSError)):
+        return True
+    if isinstance(error, URLError):
+        return isinstance(error.reason, (ConnectionResetError, ConnectionRefusedError, TimeoutError, OSError))
+    return False
+
+
 @dataclass(slots=True)
 class KlingVideoBridgeAdapter(VideoWorkflowPort):
     api_key: str | None
@@ -31,6 +40,8 @@ class KlingVideoBridgeAdapter(VideoWorkflowPort):
     model_name: str | None = None
     provider_name: str = "Kling AI"
     mode: str = "real"
+    submit_retry_count: int = 2
+    retry_delay_seconds: float = 0.1
 
     def prepare_scene(self, payload: SceneVideoPreparationRequestPayload) -> VideoPreparationPayload:
         prompt = (
@@ -80,14 +91,7 @@ class KlingVideoBridgeAdapter(VideoWorkflowPort):
             method="POST",
         )
 
-        try:
-            with urlopen(request, timeout=30) as response:
-                raw = response.read().decode("utf-8")
-        except HTTPError as exc:
-            message = exc.read().decode("utf-8", errors="ignore")
-            raise ValueError(f"Kling submit 요청이 실패했습니다. status={exc.code}, body={message}") from exc
-        except URLError as exc:
-            raise ValueError(f"Kling submit 요청에 실패했습니다: {exc.reason}") from exc
+        raw = self._submit_request(request)
 
         try:
             parsed = json.loads(raw or "{}")
@@ -110,3 +114,22 @@ class KlingVideoBridgeAdapter(VideoWorkflowPort):
             bundle_path=bundle_path,
             provider_name=self.provider_name,
         )
+
+    def _submit_request(self, request: Request) -> str:
+        last_error: Exception | None = None
+
+        for attempt in range(1, self.submit_retry_count + 1):
+            try:
+                with urlopen(request, timeout=30) as response:
+                    return response.read().decode("utf-8")
+            except HTTPError as exc:
+                message = exc.read().decode("utf-8", errors="ignore")
+                raise ValueError(f"Kling submit 요청이 실패했습니다. status={exc.code}, body={message}") from exc
+            except (URLError, ConnectionResetError, ConnectionRefusedError, TimeoutError, OSError) as exc:
+                last_error = exc
+                if attempt >= self.submit_retry_count or not _is_retryable_submit_error(exc):
+                    reason = exc.reason if isinstance(exc, URLError) else exc
+                    raise ValueError(f"Kling submit 요청에 실패했습니다: {reason}") from exc
+                time.sleep(self.retry_delay_seconds)
+
+        raise ValueError(f"Kling submit 요청에 실패했습니다: {last_error}")

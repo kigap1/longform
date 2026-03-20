@@ -23,6 +23,20 @@ export function useProjectsQuery() {
   });
 }
 
+export function useCreateProjectMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: Parameters<typeof apiClient.createProject>[0]) => apiClient.createProject(payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["projects"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      await queryClient.invalidateQueries({ queryKey: ["issues"] });
+      await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    }
+  });
+}
+
 export function useDashboardQuery(projectId?: string) {
   return useQuery({
     queryKey: ["dashboard", projectId ?? "current"],
@@ -53,11 +67,10 @@ export function useRankIssuesMutation(projectId?: string) {
   });
 }
 
-export function useStatisticsQuery(projectId: string) {
+export function useStatisticsQuery(projectId?: string) {
   return useQuery({
-    queryKey: ["statistics", projectId],
-    queryFn: () => apiClient.statistics(projectId),
-    enabled: Boolean(projectId)
+    queryKey: ["statistics", projectId ?? "default"],
+    queryFn: () => apiClient.statistics(projectId ?? "project-1")
   });
 }
 
@@ -105,9 +118,8 @@ export function useAIProvidersQuery() {
 
 export function useScriptWorkspaceQuery(projectId?: string) {
   return useQuery({
-    queryKey: ["script-workspace", projectId ?? "current"],
-    queryFn: () => apiClient.scriptWorkspace(projectId ?? "project-1"),
-    enabled: Boolean(projectId)
+    queryKey: ["script-workspace", projectId ?? "default"],
+    queryFn: () => apiClient.scriptWorkspace(projectId ?? "project-1")
   });
 }
 
@@ -157,9 +169,8 @@ export function useImagesQuery() {
 
 export function useImageWorkspaceQuery(projectId?: string) {
   return useQuery({
-    queryKey: ["image-workspace", projectId ?? "current"],
-    queryFn: () => apiClient.images(projectId ?? "project-1"),
-    enabled: Boolean(projectId)
+    queryKey: ["image-workspace", projectId ?? "default"],
+    queryFn: () => apiClient.images(projectId ?? "project-1")
   });
 }
 
@@ -202,9 +213,8 @@ export function useVideosQuery() {
 
 export function useVideoWorkspaceQuery(projectId?: string) {
   return useQuery({
-    queryKey: ["video-workspace", projectId ?? "current"],
-    queryFn: () => apiClient.images(projectId ?? "project-1"),
-    enabled: Boolean(projectId)
+    queryKey: ["video-workspace", projectId ?? "default"],
+    queryFn: () => apiClient.images(projectId ?? "project-1")
   });
 }
 
@@ -265,5 +275,13 @@ export function useJobsQuery(projectId?: string) {
   return useQuery({
     queryKey: ["jobs", projectId ?? "current"],
     queryFn: () => apiClient.jobs(projectId)
+  });
+}
+
+export function useWorkspaceSearchQuery(projectId: string | undefined, query: string) {
+  return useQuery({
+    queryKey: ["workspace-search", projectId ?? "current", query],
+    queryFn: () => apiClient.searchWorkspace(projectId, query),
+    enabled: query.trim().length >= 2
   });
 }

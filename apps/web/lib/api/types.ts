@@ -48,12 +48,33 @@ export type ProjectOption = {
   summary: string;
   stage: string;
   updatedAt: string;
+  issueFocus?: string;
+};
+
+export type CreateProjectPayload = {
+  name: string;
+  description?: string;
+  issue_focus?: string;
 };
 
 export type IssueRankPayload = {
   project_id?: string;
   category?: string;
   keywords?: readonly string[];
+  user_instructions?: string;
+};
+
+export type IssueArticleViewModel = {
+  id: string;
+  title: string;
+  sourceName: string;
+  publishedAt: string;
+  url: string;
+  summary: string;
+  country: string;
+  region: string;
+  popularity: number;
+  credibility: number;
 };
 
 export type IssueCardViewModel = {
@@ -62,6 +83,30 @@ export type IssueCardViewModel = {
   category: string;
   score: number;
   reasons: readonly string[];
+  summary: string;
+  articleCount: number;
+  regions: readonly string[];
+  topSources: readonly string[];
+  youtubeAngles: readonly string[];
+  whyNow: string;
+  articles: readonly IssueArticleViewModel[];
+};
+
+export type IssueGroupViewModel = {
+  issueId: string;
+  title: string;
+  detail: string;
+  articleCount: number;
+  regions: readonly string[];
+  topSources: readonly string[];
+  articles: readonly IssueArticleViewModel[];
+};
+
+export type IssueHighlightViewModel = {
+  issueId: string;
+  title: string;
+  subtitle: string;
+  tone: "hot" | "watch" | "idea";
 };
 
 export type EvidencePanelItem = {
@@ -94,8 +139,13 @@ export type DashboardSnapshot = {
 
 export type IssueDiscoverySnapshot = {
   filters: readonly string[];
+  regionFilters: readonly string[];
+  sortOptions: readonly string[];
+  keywordSuggestions: readonly string[];
+  highlights: readonly IssueHighlightViewModel[];
+  lastCollectedAt?: string;
   items: readonly IssueCardViewModel[];
-  groups: readonly { title: string; detail: string }[];
+  groups: readonly IssueGroupViewModel[];
 };
 
 export type StatisticRowViewModel = {
@@ -270,4 +320,12 @@ export type VideoExecutionResult = {
   outputPath: string;
   bundlePath: string;
   jobId: string;
+};
+
+export type WorkspaceSearchResult = {
+  id: string;
+  kind: "프로젝트" | "이슈" | "지표" | "자산";
+  title: string;
+  detail: string;
+  href: string;
 };

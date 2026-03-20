@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useState, type FormEvent } from "react";
 
 import { FilterBar } from "@/components/shared/filter-bar";
@@ -14,6 +15,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { resolveApiUrl } from "@/lib/api/client";
 import { useCaptureSnapshotMutation, useSnapshotsQuery } from "@/lib/api/hooks";
 import { useProjectStore } from "@/lib/stores/project-store";
+
+
+function captureModeLabel(mode: string) {
+  if (mode === "stub") return "스텁 캡처";
+  if (mode === "real") return "실캡처";
+  return mode;
+}
 
 
 export default function SnapshotsPage() {
@@ -77,7 +85,7 @@ export default function SnapshotsPage() {
         <SectionCard title="캡처 요청" description={`${projectName} 프로젝트에 연결되는 저장 요청입니다.`}>
           <form className="space-y-4" onSubmit={handleSubmit}>
             <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Source URL</p>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">출처 URL</p>
               <Input
                 value={form.source_url}
                 onChange={(event) => setForm((current) => ({ ...current, source_url: event.target.value }))}
@@ -86,7 +94,7 @@ export default function SnapshotsPage() {
               />
             </div>
             <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Source Title</p>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">출처 제목</p>
               <Input
                 value={form.source_title}
                 onChange={(event) => setForm((current) => ({ ...current, source_title: event.target.value }))}
@@ -94,7 +102,7 @@ export default function SnapshotsPage() {
               />
             </div>
             <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Evidence Label</p>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">근거 라벨</p>
               <Input
                 value={form.evidence_label}
                 onChange={(event) => setForm((current) => ({ ...current, evidence_label: event.target.value }))}
@@ -102,7 +110,7 @@ export default function SnapshotsPage() {
               />
             </div>
             <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Note</p>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">메모</p>
               <Textarea
                 value={form.note}
                 onChange={(event) => setForm((current) => ({ ...current, note: event.target.value }))}
@@ -137,13 +145,22 @@ export default function SnapshotsPage() {
                     : "border-slate-200 hover:border-slate-300"
                 }`}
               >
-                <div className="aspect-[16/10] overflow-hidden bg-[linear-gradient(135deg,#112240,#0f766e)]">
-                  <img src={resolveApiUrl(snapshot.preview_url)} alt={snapshot.title} className="h-full w-full object-cover" />
+                <div className="relative aspect-[16/10] overflow-hidden bg-[linear-gradient(135deg,#112240,#0f766e)]">
+                  <Image
+                    src={resolveApiUrl(snapshot.preview_url)}
+                    alt={snapshot.title}
+                    fill
+                    unoptimized
+                    sizes="(min-width: 1280px) 30vw, 100vw"
+                    className="object-cover"
+                  />
                 </div>
                 <div className="space-y-3 p-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge>{snapshot.source_title}</Badge>
-                    <Badge tone={snapshot.capture_mode === "stub" ? "warning" : "success"}>{snapshot.capture_mode}</Badge>
+                    <Badge tone={snapshot.capture_mode === "stub" ? "warning" : "success"}>
+                      {captureModeLabel(snapshot.capture_mode)}
+                    </Badge>
                     <Badge tone="supplementary">근거 {snapshot.attached_evidences.length}건</Badge>
                   </div>
                   <div>
@@ -160,13 +177,20 @@ export default function SnapshotsPage() {
         <SectionCard title="미리보기 / 근거 연결" description="선택한 캡처의 preview와 연결된 evidence를 함께 확인합니다.">
           {selectedSnapshot ? (
             <div className="space-y-5">
-              <div className="overflow-hidden rounded-3xl border border-slate-200 bg-slate-50">
-                <img src={resolveApiUrl(selectedSnapshot.preview_url)} alt={selectedSnapshot.title} className="h-full w-full object-cover" />
+              <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 aspect-[16/10]">
+                <Image
+                  src={resolveApiUrl(selectedSnapshot.preview_url)}
+                  alt={selectedSnapshot.title}
+                  fill
+                  unoptimized
+                  sizes="(min-width: 1280px) 30vw, 100vw"
+                  className="object-cover"
+                />
               </div>
               <div className="flex flex-wrap gap-2">
                 <Badge>{selectedSnapshot.source_title}</Badge>
                 <Badge tone={selectedSnapshot.capture_mode === "stub" ? "warning" : "success"}>
-                  {selectedSnapshot.capture_mode}
+                  {captureModeLabel(selectedSnapshot.capture_mode)}
                 </Badge>
                 <Badge tone="supplementary">프로젝트 연결됨</Badge>
               </div>
@@ -177,15 +201,15 @@ export default function SnapshotsPage() {
               ) : null}
               <div className="grid gap-3 text-sm text-slate-600">
                 <div className="rounded-2xl border border-slate-200 p-4">
-                  <p className="font-medium text-ink">Source URL</p>
+                  <p className="font-medium text-ink">출처 URL</p>
                   <p className="mt-2 break-all">{selectedSnapshot.source_url}</p>
                 </div>
                 <div className="rounded-2xl border border-slate-200 p-4">
-                  <p className="font-medium text-ink">Captured At</p>
+                  <p className="font-medium text-ink">캡처 시각</p>
                   <p className="mt-2">{selectedSnapshot.captured_at}</p>
                 </div>
                 <div className="rounded-2xl border border-slate-200 p-4">
-                  <p className="font-medium text-ink">Evidence Attachments</p>
+                  <p className="font-medium text-ink">연결 근거</p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {selectedSnapshot.attached_evidences.length ? (
                       selectedSnapshot.attached_evidences.map((evidence) => (

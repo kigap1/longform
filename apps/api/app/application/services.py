@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import date, timezone
 import json
 from pathlib import Path
+import re
 from uuid import uuid4
 import zipfile
 
@@ -129,6 +130,7 @@ from app.infrastructure.db.repositories import RepositoryRegistry, utcnow
 from app.infrastructure.providers.adapters import (
     EcosAdapter,
     FredAdapter,
+    GoogleNewsRssAdapter,
     InvestingAdapter,
     KosisAdapter,
     MockGlobalNewsAdapter,
@@ -180,6 +182,116 @@ def _resolve_project(repositories: RepositoryRegistry, project_id: str | None) -
     return _default_project(repositories)
 
 
+ISSUE_THEME_CONFIGS = [
+    {
+        "title": "미국 금리 인하 기대와 원화 변동성",
+        "category": "economy",
+        "summary": "연준 기대, 환율, 외국인 수급을 함께 묶어 설명하기 좋은 거시 이슈입니다.",
+        "why_now": "미국 금리 전망과 원달러 환율이 동시에 흔들리며 한국 시청자 체감도가 높습니다.",
+        "suggested_angles": [
+            "원달러 환율이 다시 뛰는 이유",
+            "연준 기대가 한국 증시에 주는 영향",
+            "외국인 수급과 환율을 함께 봐야 하는 이유",
+        ],
+        "market_impact": 0.93,
+        "keywords": ("fed", "fomc", "금리", "환율", "원화", "달러", "외국인", "asia fx"),
+    },
+    {
+        "title": "중동 해상 물류 리스크와 유가 재상승",
+        "category": "geopolitics",
+        "summary": "중동 긴장, 해상 운임, 국제유가를 연결해 물가와 경기 파급을 설명하는 주제입니다.",
+        "why_now": "유가와 공급망 뉴스가 다시 붙으면서 물가와 소비 위축 우려를 함께 설명할 수 있습니다.",
+        "suggested_angles": [
+            "유가가 오르면 한국 경제에 생기는 일",
+            "중동 리스크가 물가를 밀어 올리는 경로",
+            "원유와 해상 운임을 함께 봐야 하는 이유",
+        ],
+        "market_impact": 0.91,
+        "keywords": ("oil", "유가", "중동", "middle east", "shipping", "red sea", "brent", "wti", "해상", "원유"),
+    },
+    {
+        "title": "중국 부동산 경기 부진과 한국 수출 영향",
+        "category": "investing",
+        "summary": "중국 경기와 한국 수출주, 반도체, 화학 업종을 연결해서 설명하기 좋은 투자 주제입니다.",
+        "why_now": "중국 경기 뉴스가 나올 때마다 한국 수출과 업종별 온도차가 같이 움직이고 있습니다.",
+        "suggested_angles": [
+            "중국 경기 기대만으로 한국 수출주가 오를까",
+            "반도체와 화학주는 중국을 얼마나 타는가",
+            "중국 뉴스가 나오면 먼저 봐야 할 숫자",
+        ],
+        "market_impact": 0.84,
+        "keywords": ("china", "중국", "수출", "property", "부동산", "반도체", "export", "stimulus"),
+    },
+    {
+        "title": "미국 장기금리와 기술주 밸류에이션 부담",
+        "category": "investing",
+        "summary": "미국 장기금리 변화가 나스닥과 국내 성장주 밸류에이션에 주는 압박을 설명합니다.",
+        "why_now": "장기금리와 AI 주도주의 동행 여부가 투자자 관심의 중심에 있습니다.",
+        "suggested_angles": [
+            "미국 10년물이 오르면 성장주는 왜 흔들릴까",
+            "AI 주도주와 금리의 관계",
+            "나스닥 변동성을 한국 투자자가 읽는 법",
+        ],
+        "market_impact": 0.82,
+        "keywords": ("yield", "treasury", "10-year", "장기금리", "나스닥", "기술주", "tech", "ai"),
+    },
+    {
+        "title": "엔화 반등과 아시아 외환시장 재편",
+        "category": "economy",
+        "summary": "엔화, 원화, 달러 흐름을 한 번에 묶어 아시아 외환시장을 설명할 수 있는 주제입니다.",
+        "why_now": "일본 정책 변화와 아시아 통화 변동성이 함께 커지며 비교 설명 수요가 높습니다.",
+        "suggested_angles": [
+            "엔화가 오르면 원화는 어떻게 움직일까",
+            "일본 정책 변화가 한국 수출에 주는 힌트",
+            "아시아 외환시장에서 지금 봐야 할 통화",
+        ],
+        "market_impact": 0.77,
+        "keywords": ("yen", "엔화", "boj", "일본", "japan", "아시아 통화", "fx"),
+    },
+]
+
+
+def _infer_article_country(source_name: str, title: str) -> str:
+    normalized = f"{source_name} {title}".lower()
+    if re.search(r"[가-힣]", source_name):
+        return "한국"
+    if any(token in normalized for token in ("reuters", "bloomberg", "wsj", "cnbc", "marketwatch", "seeking alpha")):
+        return "미국"
+    if any(token in normalized for token in ("nikkei", "니혼게이자이", "boj", "japan")):
+        return "일본"
+    if any(token in normalized for token in ("caixin", "신화", "china daily")):
+        return "중국"
+    return "글로벌"
+
+
+def _infer_region(country: str) -> str:
+    if country in {"한국", "일본", "중국"}:
+        return "아시아"
+    if country == "미국":
+        return "북미"
+    return "글로벌"
+
+
+def _estimate_popularity(source_name: str, published_at) -> float:
+    normalized = source_name.lower()
+    baseline = 92 if any(name in normalized for name in ("reuters", "bloomberg")) else 86
+    if re.search(r"[가-힣]", source_name):
+        baseline = 84
+    observed_at = published_at
+    if getattr(observed_at, "tzinfo", None) is None:
+        observed_at = observed_at.replace(tzinfo=timezone.utc)
+    hours = max(0.0, (utcnow() - observed_at).total_seconds() / 3600)
+    return max(62.0, round(baseline - min(hours, 36) * 0.8, 1))
+
+
+def _theme_for_article(article) -> dict[str, object]:
+    text = f"{article.title} {article.summary}".lower()
+    for theme in ISSUE_THEME_CONFIGS:
+        if any(token in text for token in theme["keywords"]):
+            return theme
+    return ISSUE_THEME_CONFIGS[0]
+
+
 @dataclass(slots=True)
 class ProviderRegistry:
     news: list[NewsProviderPort]
@@ -198,7 +310,20 @@ def build_provider_registry(repositories: RepositoryRegistry | None = None) -> P
     video_workflow = build_video_provider(runtime.default_provider("video"), runtime.default_mode("video"), runtime)
 
     return ProviderRegistry(
-        news=[MockKoreanNewsAdapter(), MockGlobalNewsAdapter()],
+        news=[
+            GoogleNewsRssAdapter(),
+            GoogleNewsRssAdapter(
+                language="en-US",
+                market="US",
+                ceid="US:en",
+                default_queries=(
+                    "Fed OR dollar OR Asia FX when:2d",
+                    "Middle East OR oil OR shipping when:2d",
+                    "China property OR Korea exports when:2d",
+                    "Treasury yields OR Nasdaq OR AI stocks when:2d",
+                ),
+            ),
+        ],
         statistics=[EcosAdapter(), KosisAdapter(), FredAdapter(), OecdAdapter()],
         market_data=[YahooFinanceAdapter(), InvestingAdapter(), SeekingAlphaAdapter()],
         snapshot=MockSnapshotAdapter(),
@@ -315,59 +440,91 @@ class IssueService:
 
     def _build_cards(self, keywords: list[str] | None = None) -> list[IssueSummaryCard]:
         fetched_articles = []
+        joined_keywords = ",".join(keywords or []) or None
         for provider in self.providers.news:
-            fetched_articles.extend(provider.fetch_latest(",".join(keywords or []) or None))
+            fetched_articles.extend(provider.fetch_latest(joined_keywords))
+
+        if not fetched_articles:
+            fetched_articles.extend(MockKoreanNewsAdapter().fetch_latest(joined_keywords))
+            fetched_articles.extend(MockGlobalNewsAdapter().fetch_latest(joined_keywords))
+
+        credible_articles = [article for article in fetched_articles if article.credibility_score >= 0.78]
+        if len(credible_articles) >= 6:
+            fetched_articles = credible_articles
+
+        deduplicated = []
+        seen: set[tuple[str, str]] = set()
+        for article in fetched_articles:
+            key = (article.title.strip().lower(), article.source_name.strip().lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            deduplicated.append(article)
 
         grouped: dict[str, list] = defaultdict(list)
-        for article in fetched_articles:
-            title = article.title.lower()
-            if "oil" in title or "유가" in title or "중동" in title:
-                grouped["중동 해상 물류 리스크와 유가 재상승"].append(article)
-            elif "china" in title or "중국" in title or "property" in title:
-                grouped["중국 부동산 경기 부진과 한국 수출 영향"].append(article)
-            else:
-                grouped["미국 금리 인하 기대와 원화 변동성"].append(article)
+        metadata_by_title: dict[str, dict[str, object]] = {}
+        for article in deduplicated:
+            theme = _theme_for_article(article)
+            title = str(theme["title"])
+            grouped[title].append(article)
+            metadata_by_title[title] = theme
 
         ranked = rank_issue_signals(
             [
                 IssueSignal(
                     issue_id=f"issue-{index + 1}",
                     title=title,
-                    recency_hours=min((utcnow() - max(item.published_at for item in articles)).total_seconds() / 3600, 72),
+                    recency_hours=min(
+                        (utcnow() - max(item.published_at for item in articles)).total_seconds() / 3600,
+                        72,
+                    ),
                     article_count=len(articles),
-                    source_credibility=round(sum(item.credibility_score for item in articles) / len(articles), 2),
-                    market_impact=0.9 if "금리" in title or "유가" in title else 0.76,
+                    source_credibility=round(
+                        sum(item.credibility_score for item in articles) / max(len(articles), 1),
+                        2,
+                    ),
+                    market_impact=float(metadata_by_title[title]["market_impact"]),
                 )
                 for index, (title, articles) in enumerate(grouped.items())
+                if articles
             ]
         )
 
         cards: list[IssueSummaryCard] = []
         for ranked_issue in ranked:
-            articles = grouped[ranked_issue.title]
-            category = "economy"
-            if "유가" in ranked_issue.title or "중동" in ranked_issue.title:
-                category = "geopolitics"
-            elif "수출" in ranked_issue.title:
-                category = "investing"
+            articles = sorted(grouped[ranked_issue.title], key=lambda item: item.published_at, reverse=True)
+            metadata = metadata_by_title[ranked_issue.title]
+            countries = [_infer_article_country(article.source_name, article.title) for article in articles]
+            top_sources = list(dict.fromkeys(article.source_name for article in articles))[:4]
+            related_articles = [
+                ArticleSummary(
+                    id=str(uuid4()),
+                    title=article.title,
+                    source_name=article.source_name,
+                    published_at=article.published_at,
+                    url=article.url,
+                    summary=article.summary,
+                    country=_infer_article_country(article.source_name, article.title),
+                    region=_infer_region(_infer_article_country(article.source_name, article.title)),
+                    popularity_score=_estimate_popularity(article.source_name, article.published_at),
+                    credibility_score=article.credibility_score,
+                )
+                for article in articles[:8]
+            ]
             cards.append(
                 IssueSummaryCard(
                     id=ranked_issue.issue_id,
                     title=ranked_issue.title,
-                    category=category,
+                    category=str(metadata["category"]),
                     priority_score=ranked_issue.score,
                     reasons=ranked_issue.reasons,
-                    related_articles=[
-                        ArticleSummary(
-                            id=str(uuid4()),
-                            title=article.title,
-                            source_name=article.source_name,
-                            published_at=article.published_at,
-                            url=article.url,
-                            summary=article.summary,
-                        )
-                        for article in articles
-                    ],
+                    summary=str(metadata["summary"]),
+                    article_count=len(articles),
+                    regions=list(dict.fromkeys(countries)),
+                    top_sources=top_sources,
+                    suggested_angles=list(metadata["suggested_angles"]),
+                    why_now=str(metadata["why_now"]),
+                    related_articles=related_articles,
                 )
             )
         return cards
@@ -383,6 +540,30 @@ class IssueService:
                 category=issue.category,
                 priority_score=issue.priority_score,
                 reasons=issue.ranking_reasons,
+                summary=issue.summary,
+                article_count=len(issue.articles),
+                regions=list(
+                    dict.fromkeys(
+                        _infer_article_country(article.source_name, article.title) for article in issue.articles
+                    )
+                ),
+                top_sources=list(dict.fromkeys(article.source_name for article in issue.articles))[:4],
+                suggested_angles=next(
+                    (
+                        list(theme["suggested_angles"])
+                        for theme in ISSUE_THEME_CONFIGS
+                        if theme["title"] == issue.title
+                    ),
+                    [],
+                ),
+                why_now=next(
+                    (
+                        str(theme["why_now"])
+                        for theme in ISSUE_THEME_CONFIGS
+                        if theme["title"] == issue.title
+                    ),
+                    None,
+                ),
                 related_articles=[
                     ArticleSummary(
                         id=article.id,
@@ -391,6 +572,10 @@ class IssueService:
                         published_at=article.published_at,
                         url=article.url,
                         summary=article.summary,
+                        country=_infer_article_country(article.source_name, article.title),
+                        region=_infer_region(_infer_article_country(article.source_name, article.title)),
+                        popularity_score=_estimate_popularity(article.source_name, article.published_at),
+                        credibility_score=article.credibility_score,
                     )
                     for article in issue.articles
                 ],
@@ -405,7 +590,10 @@ class IssueService:
         return IssueListResponse(items=cards, meta={"total": len(cards), "page": 1, "page_size": 20})
 
     def rank(self, payload: IssueRankRequest) -> IssueRankResponse:
-        cards = self._build_cards(payload.keywords)
+        effective_keywords = list(payload.keywords)
+        if payload.user_instructions:
+            effective_keywords.extend(re.findall(r"[가-힣A-Za-z0-9/+.-]{2,}", payload.user_instructions))
+        cards = self._build_cards(effective_keywords)
         if payload.project_id:
             project = _resolve_project(self.repositories, payload.project_id)
             self.repositories.issues.replace_for_project(
@@ -414,7 +602,7 @@ class IssueService:
                     {
                         "title": card.title,
                         "category": card.category,
-                        "summary": f"{card.title} 관련 이슈 군집",
+                        "summary": card.summary or f"{card.title} 관련 이슈 군집",
                         "priority_score": card.priority_score,
                         "reasons": list(card.reasons),
                         "related_articles": [
@@ -424,7 +612,10 @@ class IssueService:
                                 "url": article.url,
                                 "published_at": article.published_at,
                                 "summary": article.summary,
-                                "credibility_score": 0.8,
+                                "country": article.country,
+                                "region": article.region,
+                                "popularity_score": article.popularity_score,
+                                "credibility_score": article.credibility_score or 0.8,
                             }
                             for article in card.related_articles
                         ],
@@ -436,7 +627,7 @@ class IssueService:
                 project_id=project.id,
                 job_type="issue_discovery",
                 status="success",
-                payload={"keywords": payload.keywords},
+                payload={"keywords": effective_keywords},
                 result={"issues": len(cards)},
             )
             self.repositories.jobs.add_log(job_id=job.id, level="INFO", message="이슈 랭킹 결과가 프로젝트에 저장되었습니다.")

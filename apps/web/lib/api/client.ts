@@ -1,4 +1,5 @@
 import {
+  createProject as createProjectMock,
   getCharacterLibrary,
   captureSnapshot as captureSnapshotMock,
   getDashboardSnapshot,
@@ -8,6 +9,8 @@ import {
   getMarketSnapshot,
   getProjects as getProjectsMock,
   getReviewWorkspace,
+  rankIssues as rankIssuesMock,
+  searchWorkspace as searchWorkspaceMock,
   getScriptWorkspace,
   getSettingsSnapshot as getSettingsSnapshotMock,
   getSnapshotLibrary,
@@ -18,6 +21,7 @@ import { dashboardTabs, filterPresets } from "@/lib/mock-data";
 import type {
   AIProviderCatalog,
   CharacterLibrarySnapshot,
+  CreateProjectPayload,
   DashboardSnapshot,
   EvidencePanelItem,
   ImageGenerationResult,
@@ -36,12 +40,13 @@ import type {
   SnapshotSummary,
   StatisticsSnapshot,
   VideoExecutionResult,
-  VideoPreparationResult
+  VideoPreparationResult,
+  WorkspaceSearchResult
 } from "@/lib/api/types";
 
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api";
-const USE_MOCK_API = process.env.NEXT_PUBLIC_USE_MOCK_API !== "false";
+const USE_MOCK_API = process.env.NEXT_PUBLIC_USE_MOCK_API === "true";
 const API_ORIGIN = API_BASE_URL.replace(/\/api\/?$/, "");
 
 function providerDisplayName(providerId: string | undefined) {
@@ -121,7 +126,17 @@ type RawIssueListResponse = {
       published_at: string;
       url: string;
       summary: string;
+      country?: string;
+      region?: string;
+      popularity_score?: number | null;
+      credibility_score?: number | null;
     }>;
+    summary?: string;
+    article_count?: number;
+    regions?: string[];
+    top_sources?: string[];
+    suggested_angles?: string[];
+    why_now?: string;
   }>;
 };
 
@@ -344,6 +359,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function withMockFallback<T>(label: string, realFactory: () => Promise<T>, mockFactory: () => Promise<T>): Promise<T> {
+  if (USE_MOCK_API) {
+    return mockFactory();
+  }
+
+  try {
+    return await realFactory();
+  } catch (error) {
+    console.warn(`[apiClient] ${label} 요청이 실패해 mock 데이터를 사용합니다.`, error);
+    return mockFactory();
+  }
+}
+
 export function resolveApiUrl(path: string): string {
   if (!path) return path;
   if (/^(https?:)?\/\//.test(path) || path.startsWith("data:")) {
@@ -356,206 +384,267 @@ export function resolveApiUrl(path: string): string {
 }
 
 export const apiClient = {
-  projects: async (): Promise<ProjectOption[]> => {
-    if (USE_MOCK_API) return getProjectsMock();
-    const response = await request<RawProjectListResponse>("/projects");
-    return response.items.map((project) => ({
-      id: project.id,
-      name: project.name,
-      summary: project.description || "프로젝트 설명이 아직 없습니다.",
-      stage: "운영 중",
-      updatedAt: formatDateTime(project.updated_at)
-    }));
-  },
+  projects: async (): Promise<ProjectOption[]> =>
+    withMockFallback(
+      "projects",
+      async () => {
+        const response = await request<RawProjectListResponse>("/projects");
+        return response.items.map((project) => ({
+          id: project.id,
+          name: project.name,
+          summary: project.description || "프로젝트 설명이 아직 없습니다.",
+          stage: "운영 중",
+          updatedAt: formatDateTime(project.updated_at),
+          issueFocus: project.issue_focus ?? undefined
+        }));
+      },
+      () => getProjectsMock()
+    ),
 
-  dashboard: async (projectId?: string): Promise<DashboardSnapshot> => {
-    if (USE_MOCK_API) return getDashboardSnapshot();
-    const [projects, issues, jobs, evidences] = await Promise.all([
-      apiClient.projects(),
-      apiClient.issues(projectId),
-      apiClient.jobs(projectId),
-      projectId ? fetchEvidenceReport(projectId) : Promise.resolve([] as EvidencePanelItem[])
-    ]);
+  createProject: async (payload: CreateProjectPayload): Promise<ProjectOption> =>
+    withMockFallback(
+      "createProject",
+      async () => {
+        const response = await request<RawProjectListResponse["items"][number]>("/projects", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        return {
+          id: response.id,
+          name: response.name,
+          summary: response.description || "프로젝트 설명이 아직 없습니다.",
+          stage: "이슈 탐색",
+          updatedAt: formatDateTime(response.updated_at),
+          issueFocus: response.issue_focus ?? undefined
+        };
+      },
+      () => createProjectMock(payload)
+    ),
 
-    const successJobs = jobs.items.filter((item) => item.status === "성공").length;
-    const runningJobs = jobs.items.filter((item) => item.status === "실행 중").length;
-    const pendingJobs = jobs.items.filter((item) => item.status === "대기").length;
-    const failedJobs = jobs.items.filter((item) => item.status === "실패").length;
-    const verifiedEvidenceCount = evidences.filter((item) => item.tone === "verified").length;
+  dashboard: async (projectId?: string): Promise<DashboardSnapshot> =>
+    withMockFallback(
+      "dashboard",
+      async () => {
+        const [projects, issues, jobs, evidences] = await Promise.all([
+          apiClient.projects(),
+          apiClient.issues(projectId),
+          apiClient.jobs(projectId),
+          projectId ? fetchEvidenceReport(projectId) : Promise.resolve([] as EvidencePanelItem[])
+        ]);
 
-    return {
-      metrics: [
-        { label: "활성 프로젝트", value: String(projects.length), change: `운영 중 ${projects.length}` },
-        { label: "검증 완료 근거", value: String(verifiedEvidenceCount), change: `전체 ${evidences.length}` },
-        { label: "대기 작업", value: String(pendingJobs + runningJobs), change: `실행 중 ${runningJobs}` },
-        { label: "완료 산출물", value: String(successJobs), change: `실패 ${failedJobs}` }
-      ],
-      tabs: dashboardTabs,
-      issues: issues.items.slice(0, 3),
-      evidences: evidences.slice(0, 4),
-      jobs: jobs.items.slice(0, 5)
-    };
-  },
+        const successJobs = jobs.items.filter((item) => item.status === "성공").length;
+        const runningJobs = jobs.items.filter((item) => item.status === "실행 중").length;
+        const pendingJobs = jobs.items.filter((item) => item.status === "대기").length;
+        const failedJobs = jobs.items.filter((item) => item.status === "실패").length;
+        const verifiedEvidenceCount = evidences.filter((item) => item.tone === "verified").length;
 
-  issues: async (projectId?: string): Promise<IssueDiscoverySnapshot> => {
-    if (USE_MOCK_API) return getIssueDiscoverySnapshot();
-    const response = await request<RawIssueListResponse>(`/issues${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`);
-    const items = response.items.map(toIssueCard);
-    return {
-      filters: filterPresets.issueCategories,
-      items,
-      groups: response.items.map((issue) => ({
-        title: `${issue.title} 기사 ${issue.related_articles.length}건`,
-        detail:
-          issue.related_articles.length > 0
-            ? `${unique(issue.related_articles.map((article) => article.source_name)).join(", ")} 기사 묶음`
-            : "연결된 기사 없음"
-      }))
-    };
-  },
+        return {
+          metrics: [
+            { label: "활성 프로젝트", value: String(projects.length), change: `운영 중 ${projects.length}` },
+            { label: "검증 완료 근거", value: String(verifiedEvidenceCount), change: `전체 ${evidences.length}` },
+            { label: "대기 작업", value: String(pendingJobs + runningJobs), change: `실행 중 ${runningJobs}` },
+            { label: "완료 산출물", value: String(successJobs), change: `실패 ${failedJobs}` }
+          ],
+          tabs: dashboardTabs,
+          issues: issues.items.slice(0, 3),
+          evidences: evidences.slice(0, 4),
+          jobs: jobs.items.slice(0, 5)
+        };
+      },
+      () => getDashboardSnapshot(projectId)
+    ),
 
-  rankIssues: async (payload: IssueRankPayload): Promise<IssueDiscoverySnapshot> => {
-    if (USE_MOCK_API) return getIssueDiscoverySnapshot();
-    const response = await request<RawIssueListResponse>("/issues/rank", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
-    return {
-      filters: filterPresets.issueCategories,
-      items: response.items.map(toIssueCard),
-      groups: response.items.map((issue) => ({
-        title: `${issue.title} 기사 ${issue.related_articles.length}건`,
-        detail:
-          issue.related_articles.length > 0
-            ? `${unique(issue.related_articles.map((article) => article.source_name)).join(", ")} 기사 묶음`
-            : "연결된 기사 없음"
-      }))
-    };
-  },
+  issues: async (projectId?: string): Promise<IssueDiscoverySnapshot> =>
+    withMockFallback(
+      "issues",
+      async () => {
+        const response = await request<RawIssueListResponse>(
+          `/issues${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`
+        );
+        return toIssueDiscoverySnapshot(response);
+      },
+      () => getIssueDiscoverySnapshot(projectId)
+    ),
 
-  statistics: async (projectId: string): Promise<StatisticsSnapshot> => {
-    if (USE_MOCK_API) return getStatisticsSnapshotMock();
-    const issues = await request<RawIssueListResponse>(`/issues?project_id=${encodeURIComponent(projectId)}`);
-    const issueId = issues.items[0]?.id ?? projectId;
-    const statistics = await request<RawStatisticListResponse>("/stats/recommend", {
-      method: "POST",
-      body: JSON.stringify({ project_id: projectId, issue_id: issueId })
-    });
-    const evidenceContext = await request<RawEvidenceContextResponse>("/stats/evidence-context", {
-      method: "POST",
-      body: JSON.stringify({
-        project_id: projectId,
-        indicator_codes: statistics.items.slice(0, 3).map((item) => item.indicator_code),
-        market_symbols: []
-      })
-    });
+  rankIssues: async (payload: IssueRankPayload): Promise<IssueDiscoverySnapshot> =>
+    withMockFallback(
+      "rankIssues",
+      async () => {
+        const response = await request<RawIssueListResponse>("/issues/rank", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        return toIssueDiscoverySnapshot(response);
+      },
+      () => rankIssuesMock(payload)
+    ),
 
-    return {
-      filters: filterPresets.dataFreshness,
-      items: statistics.items.map((item) => ({
-        code: item.indicator_code,
-        name: item.name,
-        source: item.source_name,
-        latest: formatValue(item.latest_value, item.unit),
-        previous: item.previous_value == null ? "-" : formatValue(item.previous_value, item.unit),
-        releaseDate: item.release_date,
-        stale: item.stale,
-        series: item.series_preview.map((point) => point.value)
-      })),
-      evidences: evidenceContext.items.map((item) => ({
-        title: item.label,
-        detail: `${item.source.source_name} · ${item.summary}`,
-        tone: item.source_kind === "market_data" ? "supplementary" : "verified"
-      }))
-    };
-  },
+  statistics: async (projectId: string): Promise<StatisticsSnapshot> =>
+    withMockFallback(
+      "statistics",
+      async () => {
+        const issues = await request<RawIssueListResponse>(`/issues?project_id=${encodeURIComponent(projectId)}`);
+        const issueId = issues.items[0]?.id ?? projectId;
+        const statistics = await request<RawStatisticListResponse>("/stats/recommend", {
+          method: "POST",
+          body: JSON.stringify({ project_id: projectId, issue_id: issueId })
+        });
+        const evidenceContext = await request<RawEvidenceContextResponse>("/stats/evidence-context", {
+          method: "POST",
+          body: JSON.stringify({
+            project_id: projectId,
+            indicator_codes: statistics.items.slice(0, 3).map((item) => item.indicator_code),
+            market_symbols: []
+          })
+        });
 
-  market: async (): Promise<MarketSnapshot> => {
-    if (USE_MOCK_API) return getMarketSnapshot();
-    const responses = await Promise.all([
-      request<RawMarketSearchResponse>("/market/search", { method: "POST", body: JSON.stringify({ query: "KRW" }) }),
-      request<RawMarketSearchResponse>("/market/search", { method: "POST", body: JSON.stringify({ query: "KOSPI" }) }),
-      request<RawMarketSearchResponse>("/market/search", { method: "POST", body: JSON.stringify({ query: "WTI" }) })
-    ]);
+        return {
+          filters: filterPresets.dataFreshness,
+          items: statistics.items.map((item) => ({
+            code: item.indicator_code,
+            name: item.name,
+            source: item.source_name,
+            latest: formatValue(item.latest_value, item.unit),
+            previous: item.previous_value == null ? "-" : formatValue(item.previous_value, item.unit),
+            releaseDate: item.release_date,
+            stale: item.stale,
+            series: item.series_preview.map((point) => point.value)
+          })),
+          evidences: evidenceContext.items.map((item) => ({
+            title: item.label,
+            detail: `${item.source.source_name} · ${item.summary}`,
+            tone: item.source_kind === "market_data" ? "supplementary" : "verified"
+          }))
+        };
+      },
+      async () => {
+        const snapshot = await getStatisticsSnapshotMock();
+        return {
+          filters: snapshot.filters,
+          items: snapshot.items.map((item) => ({
+            ...item,
+            series: [...item.series]
+          })),
+          evidences: snapshot.evidences.map((item) => ({ ...item }))
+        };
+      }
+    ),
 
-    const seen = new Set<string>();
-    const items = responses
-      .flatMap((response) => response.items)
-      .filter((item) => {
-        if (seen.has(item.symbol)) return false;
-        seen.add(item.symbol);
-        return true;
-      })
-      .slice(0, 6)
-      .map((item) => ({
-        symbol: item.symbol,
-        name: item.display_name,
-        className: translateAssetClass(item.asset_class),
-        value: formatPlainNumber(item.latest_value),
-        change: formatPercent(item.change_percent),
-        source: item.source_name,
-        series: item.chart_points.map((point) => point.value)
-      }));
+  market: async (): Promise<MarketSnapshot> =>
+    withMockFallback(
+      "market",
+      async () => {
+        const responses = await Promise.all([
+          request<RawMarketSearchResponse>("/market/search", { method: "POST", body: JSON.stringify({ query: "KRW" }) }),
+          request<RawMarketSearchResponse>("/market/search", { method: "POST", body: JSON.stringify({ query: "KOSPI" }) }),
+          request<RawMarketSearchResponse>("/market/search", { method: "POST", body: JSON.stringify({ query: "WTI" }) })
+        ]);
 
-    return {
-      periods: filterPresets.periods,
-      items
-    };
-  },
+        const seen = new Set<string>();
+        const items = responses
+          .flatMap((response) => response.items)
+          .filter((item) => {
+            if (seen.has(item.symbol)) return false;
+            seen.add(item.symbol);
+            return true;
+          })
+          .slice(0, 6)
+          .map((item) => ({
+            symbol: item.symbol,
+            name: item.display_name,
+            className: translateAssetClass(item.asset_class),
+            value: formatPlainNumber(item.latest_value),
+            change: formatPercent(item.change_percent),
+            source: item.source_name,
+            series: item.chart_points.map((point) => point.value)
+          }));
+
+        return {
+          periods: filterPresets.periods,
+          items
+        };
+      },
+      async () => {
+        const snapshot = await getMarketSnapshot();
+        return {
+          periods: snapshot.periods,
+          items: snapshot.items.map((item) => ({
+            ...item,
+            series: [...item.series]
+          }))
+        };
+      }
+    ),
 
   snapshots: (projectId?: string) =>
-    USE_MOCK_API
-      ? getSnapshotLibrary(projectId)
-      : request<SnapshotLibraryResponse>(`/snapshot/list${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`),
+    withMockFallback(
+      "snapshots",
+      () => request<SnapshotLibraryResponse>(`/snapshot/list${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`),
+      () => getSnapshotLibrary(projectId)
+    ),
 
   captureSnapshot: (payload: SnapshotCapturePayload) =>
-    USE_MOCK_API
-      ? captureSnapshotMock(payload)
-      : request<SnapshotSummary>("/snapshot/capture", { method: "POST", body: JSON.stringify(payload) }),
+    withMockFallback(
+      "captureSnapshot",
+      () => request<SnapshotSummary>("/snapshot/capture", { method: "POST", body: JSON.stringify(payload) }),
+      () => captureSnapshotMock(payload)
+    ),
 
-  characters: async (projectId?: string): Promise<CharacterLibrarySnapshot> => {
-    if (USE_MOCK_API) return getCharacterLibrary();
-    const response = await request<RawCharacterListResponse>(
-      `/characters${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`
-    );
-    return {
-      items: response.items.map((item) => ({
-        id: item.id,
-        name: item.name,
-        description: item.description,
-        rules: item.style_rules,
-        locked: item.locked
-      }))
-    };
-  },
+  characters: async (projectId?: string): Promise<CharacterLibrarySnapshot> =>
+    withMockFallback(
+      "characters",
+      async () => {
+        const response = await request<RawCharacterListResponse>(
+          `/characters${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`
+        );
+        return {
+          items: response.items.map((item) => ({
+            id: item.id,
+            name: item.name,
+            description: item.description,
+            rules: item.style_rules,
+            locked: item.locked
+          }))
+        };
+      },
+      () => getCharacterLibrary()
+    ),
 
-  aiProviders: async (): Promise<AIProviderCatalog> => {
-    if (USE_MOCK_API) return getMockAIProviderCatalog();
-    const response = await request<RawAIProviderCatalogResponse>("/settings/ai-providers");
-    return {
-      items: response.items,
-      defaults: response.defaults
-    };
-  },
+  aiProviders: async (): Promise<AIProviderCatalog> =>
+    withMockFallback(
+      "aiProviders",
+      async () => {
+        const response = await request<RawAIProviderCatalogResponse>("/settings/ai-providers");
+        return {
+          items: response.items,
+          defaults: response.defaults
+        };
+      },
+      () => Promise.resolve(getMockAIProviderCatalog())
+    ),
 
-  scriptWorkspace: async (projectId: string): Promise<ScriptWorkspace> => {
-    if (USE_MOCK_API) return toMockScriptWorkspace(await getScriptWorkspace());
-    const response = await request<RawScriptSummary | null>(`/scripts/latest?project_id=${encodeURIComponent(projectId)}`);
-    if (!response) {
-      return {
-        scriptId: "",
-        title: "생성된 대본이 아직 없습니다.",
-        summary: "먼저 이슈를 선택하고 대본 생성을 실행하면 장면과 근거 매핑이 여기에 나타납니다.",
-        providerId: "",
-        providerName: "",
-        providerMode: "mock",
-        sections: [],
-        scenes: [],
-        evidences: []
-      };
-    }
-    return toScriptWorkspace(response);
-  },
+  scriptWorkspace: async (projectId: string): Promise<ScriptWorkspace> =>
+    withMockFallback(
+      "scriptWorkspace",
+      async () => {
+        const response = await request<RawScriptSummary | null>(`/scripts/latest?project_id=${encodeURIComponent(projectId)}`);
+        if (!response) {
+          return {
+            scriptId: "",
+            title: "생성된 대본이 아직 없습니다.",
+            summary: "먼저 이슈를 선택하고 대본 생성을 실행하면 장면과 근거 매핑이 여기에 나타납니다.",
+            providerId: "",
+            providerName: "",
+            providerMode: "mock",
+            sections: [],
+            scenes: [],
+            evidences: []
+          };
+        }
+        return toScriptWorkspace(response);
+      },
+      async () => toMockScriptWorkspace(await getScriptWorkspace())
+    ),
 
   generateScript: async (payload: {
     project_id: string;
@@ -567,11 +656,15 @@ export const apiClient = {
     tone?: string;
     provider_id?: string;
     provider_mode?: string;
-  }): Promise<ScriptWorkspace> => {
-    if (USE_MOCK_API) return toMockScriptWorkspace(await getScriptWorkspace());
-    const response = await request<RawScriptSummary>("/scripts/generate", { method: "POST", body: JSON.stringify(payload) });
-    return toScriptWorkspace(response);
-  },
+  }): Promise<ScriptWorkspace> =>
+    withMockFallback(
+      "generateScript",
+      async () => {
+        const response = await request<RawScriptSummary>("/scripts/generate", { method: "POST", body: JSON.stringify(payload) });
+        return toScriptWorkspace(response);
+      },
+      async () => toMockScriptWorkspace(await getScriptWorkspace())
+    ),
 
   regenerateScriptSection: async (payload: {
     project_id: string;
@@ -580,45 +673,53 @@ export const apiClient = {
     user_instructions?: string;
     provider_id?: string;
     provider_mode?: string;
-  }): Promise<{ scriptId: string; versionNumber: number; sectionId: string; content: string }> => {
-    if (USE_MOCK_API) {
-      const mock = await getScriptWorkspace();
-      return {
-        scriptId: "mock-script",
-        versionNumber: 2,
-        sectionId: mock.sections[0]?.heading ?? "mock-section",
-        content: mock.sections[0]?.content ?? ""
-      };
-    }
-    const response = await request<{
-      script_id: string;
-      version_number: number;
-      section: { id: string; content: string };
-    }>("/scripts/regenerate-section", { method: "POST", body: JSON.stringify(payload) });
-    return {
-      scriptId: response.script_id,
-      versionNumber: response.version_number,
-      sectionId: response.section.id,
-      content: response.section.content
-    };
-  },
+  }): Promise<{ scriptId: string; versionNumber: number; sectionId: string; content: string }> =>
+    withMockFallback(
+      "regenerateScriptSection",
+      async () => {
+        const response = await request<{
+          script_id: string;
+          version_number: number;
+          section: { id: string; content: string };
+        }>("/scripts/regenerate-section", { method: "POST", body: JSON.stringify(payload) });
+        return {
+          scriptId: response.script_id,
+          versionNumber: response.version_number,
+          sectionId: response.section.id,
+          content: response.section.content
+        };
+      },
+      async () => {
+        const mock = await getScriptWorkspace();
+        return {
+          scriptId: "mock-script",
+          versionNumber: 2,
+          sectionId: mock.sections[0]?.heading ?? "mock-section",
+          content: mock.sections[0]?.content ?? ""
+        };
+      }
+    ),
 
-  images: async (projectId: string) => {
-    if (USE_MOCK_API) {
-      const mock = await getImageWorkspace();
-      return { scenes: normalizeMockScenes(mock.scenes) };
-    }
-    const workspace = await apiClient.scriptWorkspace(projectId);
-    return {
-      scenes: workspace.scenes.map((scene) => ({
-        id: scene.id,
-        title: scene.title,
-        description: scene.description,
-        prompt: scene.prompt,
-        motion: scene.motion
-      }))
-    };
-  },
+  images: async (projectId: string) =>
+    withMockFallback(
+      "images",
+      async () => {
+        const workspace = await apiClient.scriptWorkspace(projectId);
+        return {
+          scenes: workspace.scenes.map((scene) => ({
+            id: scene.id,
+            title: scene.title,
+            description: scene.description,
+            prompt: scene.prompt,
+            motion: scene.motion
+          }))
+        };
+      },
+      async () => {
+        const mock = await getImageWorkspace();
+        return { scenes: normalizeMockScenes(mock.scenes) };
+      }
+    ),
 
   generateImage: async (payload: {
     project_id: string;
@@ -627,29 +728,18 @@ export const apiClient = {
     user_instructions?: string;
     provider_id?: string;
     provider_mode?: string;
-  }): Promise<ImageGenerationResult> => {
-    if (USE_MOCK_API) {
-      const scenes = normalizeMockScenes((await getImageWorkspace()).scenes);
-      const match = scenes.find((item) => item.id === payload.scene_id) ?? scenes[0];
-      return {
-        id: `mock-image-${payload.scene_id}`,
-        sceneId: payload.scene_id,
-        sceneTitle: match?.title ?? "장면",
-        prompt: payload.prompt_override || match?.prompt || "",
-        assetUrl: `https://placehold.co/1024x1536/png?text=${encodeURIComponent(payload.scene_id)}`,
-        thumbnailUrl: `https://placehold.co/256x384/png?text=${encodeURIComponent(payload.scene_id)}`,
-        status: "ready",
-        providerId: payload.provider_id ?? "openai",
-        providerName: providerDisplayName(payload.provider_id ?? "openai"),
-        providerMode: payload.provider_mode ?? "mock"
-      };
-    }
-    const response = await request<RawImageAssetSummary>("/images/generate", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
-    return toImageResult(response);
-  },
+  }): Promise<ImageGenerationResult> =>
+    withMockFallback(
+      "generateImage",
+      async () => {
+        const response = await request<RawImageAssetSummary>("/images/generate", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        return toImageResult(response);
+      },
+      async () => buildMockImageResult(payload)
+    ),
 
   regenerateImage: async (payload: {
     project_id: string;
@@ -658,16 +748,18 @@ export const apiClient = {
     user_instructions?: string;
     provider_id?: string;
     provider_mode?: string;
-  }): Promise<ImageGenerationResult> => {
-    if (USE_MOCK_API) {
-      return apiClient.generateImage(payload);
-    }
-    const response = await request<RawImageAssetSummary>("/images/regenerate-scene", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
-    return toImageResult(response);
-  },
+  }): Promise<ImageGenerationResult> =>
+    withMockFallback(
+      "regenerateImage",
+      async () => {
+        const response = await request<RawImageAssetSummary>("/images/regenerate-scene", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        return toImageResult(response);
+      },
+      async () => buildMockImageResult(payload)
+    ),
 
   prepareVideos: async (payload: {
     project_id: string;
@@ -675,32 +767,18 @@ export const apiClient = {
     user_instructions?: string;
     provider_id?: string;
     provider_mode?: string;
-  }): Promise<VideoPreparationResult[]> => {
-    if (USE_MOCK_API) {
-      const scenes = normalizeMockScenes((await getVideoWorkspace()).scenes);
-      return scenes
-        .filter((scene) => payload.scene_ids.includes(scene.id))
-        .map((scene, index) => ({
-          id: `mock-video-${scene.id}-${index + 1}`,
-          sceneId: scene.id,
-          sceneTitle: scene.title,
-          prompt: scene.prompt,
-          motionNotes: scene.motion,
-          bundlePath: `/mock/${scene.id}.zip`,
-          bundleDownloadPath: `/mock/${scene.id}.zip`,
-          status: "ready",
-          providerId: payload.provider_id ?? "openai",
-          providerName: providerDisplayName(payload.provider_id ?? "openai"),
-          providerMode: payload.provider_mode ?? "mock",
-          jobId: `mock-job-${index + 1}`
-        }));
-    }
-    const response = await request<RawVideoAssetSummary[]>("/videos/prepare", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
-    return response.map(toVideoPreparationResult);
-  },
+  }): Promise<VideoPreparationResult[]> =>
+    withMockFallback(
+      "prepareVideos",
+      async () => {
+        const response = await request<RawVideoAssetSummary[]>("/videos/prepare", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        return response.map(toVideoPreparationResult);
+      },
+      async () => buildMockVideoPreparationResults(payload)
+    ),
 
   executeVideos: async (payload: {
     project_id: string;
@@ -708,149 +786,262 @@ export const apiClient = {
     user_instructions?: string;
     provider_id?: string;
     provider_mode?: string;
-  }): Promise<VideoExecutionResult[]> => {
-    if (USE_MOCK_API) {
-      return payload.video_asset_ids.map((videoAssetId, index) => ({
-        videoAssetId,
-        sceneId: `mock-scene-${index + 1}`,
-        status: "success",
-        providerId: payload.provider_id ?? "openai",
-        providerName: providerDisplayName(payload.provider_id ?? "openai"),
-        providerMode: payload.provider_mode ?? "mock",
-        providerJobId: `mock-provider-job-${index + 1}`,
-        outputPath: `/mock/${videoAssetId}.json`,
-        bundlePath: `/mock/${videoAssetId}.zip`,
-        jobId: `mock-job-${index + 1}`
-      }));
-    }
-    const response = await request<RawVideoExecutionSummary[]>("/videos/execute", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
-    return response.map((item) => ({
-      videoAssetId: item.video_asset_id,
-      sceneId: item.scene_id,
-      status: item.status,
-      providerId: item.provider_id,
-      providerName: item.provider_name,
-      providerMode: item.provider_mode,
-      providerJobId: item.provider_job_id,
-      outputPath: item.output_path,
-      bundlePath: item.bundle_path,
-      jobId: item.job_id
-    }));
-  },
+  }): Promise<VideoExecutionResult[]> =>
+    withMockFallback(
+      "executeVideos",
+      async () => {
+        const response = await request<RawVideoExecutionSummary[]>("/videos/execute", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        return response.map((item) => ({
+          videoAssetId: item.video_asset_id,
+          sceneId: item.scene_id,
+          status: item.status,
+          providerId: item.provider_id,
+          providerName: item.provider_name,
+          providerMode: item.provider_mode,
+          providerJobId: item.provider_job_id,
+          outputPath: item.output_path,
+          bundlePath: item.bundle_path,
+          jobId: item.job_id
+        }));
+      },
+      async () =>
+        payload.video_asset_ids.map((videoAssetId, index) => ({
+          videoAssetId,
+          sceneId: `mock-scene-${index + 1}`,
+          status: "success",
+          providerId: payload.provider_id ?? "openai",
+          providerName: providerDisplayName(payload.provider_id ?? "openai"),
+          providerMode: payload.provider_mode ?? "mock",
+          providerJobId: `mock-provider-job-${index + 1}`,
+          outputPath: `/mock/${videoAssetId}.json`,
+          bundlePath: `/mock/${videoAssetId}.zip`,
+          jobId: `mock-job-${index + 1}`
+        }))
+    ),
 
   review: () => getReviewWorkspace(),
 
-  settings: async (): Promise<SettingsSnapshot> => {
-    if (USE_MOCK_API) {
-      const snapshot = await getSettingsSnapshotMock();
-      return {
-        tabs: snapshot.tabs,
-        sections: snapshot.sections.map((section) => ({
-          category: mockCategoryFromTab(section.tab),
-          tab: section.tab,
-          title: section.title,
-          fields: section.fields.map((field) => ({
-            category: mockCategoryFromTab(section.tab),
-            key: field.key,
-            label: field.label,
-            value: field.value,
-            placeholder: field.placeholder
-          }))
-        }))
-      };
-    }
-    const response = await request<RawAppSettingsResponse>("/settings");
-    const grouped = new Map<string, RawAppSettingsResponse["items"]>();
-    response.items.forEach((item) => {
-      const rows = grouped.get(item.category) ?? [];
-      rows.push(item);
-      grouped.set(item.category, rows);
-    });
+  settings: async (): Promise<SettingsSnapshot> =>
+    withMockFallback(
+      "settings",
+      async () => {
+        const response = await request<RawAppSettingsResponse>("/settings");
+        const grouped = new Map<string, RawAppSettingsResponse["items"]>();
+        response.items.forEach((item) => {
+          const rows = grouped.get(item.category) ?? [];
+          rows.push(item);
+          grouped.set(item.category, rows);
+        });
 
-    const sections = Array.from(grouped.entries())
-      .map(([category, items]) => {
-        const tab = settingTab(category);
+        const sections = Array.from(grouped.entries())
+          .map(([category, items]) => {
+            const tab = settingTab(category);
+            return {
+              category,
+              tab,
+              title: settingTitle(category),
+              fields: items.map((field) => ({
+                category,
+                key: field.key,
+                label: settingLabel(field.key),
+                value: field.value,
+                placeholder: settingPlaceholder(field.key),
+                secret: field.secret
+              }))
+            };
+          })
+          .sort((left, right) => settingOrder(left.category) - settingOrder(right.category));
+
         return {
-          category,
-          tab,
-          title: settingTitle(category),
-          fields: items.map((field) => ({
-            category,
-            key: field.key,
-            label: settingLabel(field.key),
-            value: field.value,
-            placeholder: settingPlaceholder(field.key),
-            secret: field.secret
-          }))
+          tabs: unique(sections.map((section) => section.tab)),
+          sections
         };
-      })
-      .sort((left, right) => settingOrder(left.category) - settingOrder(right.category));
+      },
+      async () => toMockSettingsSnapshot(await getSettingsSnapshotMock())
+    ),
 
-    return {
-      tabs: unique(sections.map((section) => section.tab)),
-      sections
-    };
-  },
+  saveSettings: async (payloads: readonly SettingUpsertPayload[]): Promise<{ message: string }> =>
+    withMockFallback(
+      "saveSettings",
+      async () => {
+        await Promise.all(
+          payloads.map((payload) =>
+            request<{ message: string }>("/settings", {
+              method: "PUT",
+              body: JSON.stringify(payload)
+            })
+          )
+        );
+        return { message: "설정이 저장되었습니다." };
+      },
+      () => Promise.resolve({ message: "mock settings saved" })
+    ),
 
-  saveSettings: async (payloads: readonly SettingUpsertPayload[]): Promise<{ message: string }> => {
-    if (USE_MOCK_API) {
-      return { message: "mock settings saved" };
-    }
-    await Promise.all(
-      payloads.map((payload) =>
-        request<{ message: string }>("/settings", {
-          method: "PUT",
-          body: JSON.stringify(payload)
-        })
-      )
-    );
-    return { message: "설정이 저장되었습니다." };
-  },
+  jobs: async (projectId?: string): Promise<JobsSnapshot> =>
+    withMockFallback(
+      "jobs",
+      async () => {
+        const summaries = await request<RawJobSummary[]>(`/jobs${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`);
+        const details = await Promise.all(
+          summaries.map((summary) => request<RawJobDetailResponse>(`/jobs/${encodeURIComponent(summary.id)}`))
+        );
+        const items = details.map((detail) => ({
+          id: detail.summary.id,
+          type: translateJobType(detail.summary.job_type),
+          status: translateJobStatus(detail.summary.status),
+          startedAt: formatDateTime(detail.summary.created_at),
+          note: detail.logs.at(-1)?.message ?? "로그가 아직 없습니다."
+        }));
 
-  jobs: async (projectId?: string): Promise<JobsSnapshot> => {
-    if (USE_MOCK_API) return getJobsSnapshot();
-    const summaries = await request<RawJobSummary[]>(`/jobs${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`);
-    const details = await Promise.all(
-      summaries.map((summary) => request<RawJobDetailResponse>(`/jobs/${encodeURIComponent(summary.id)}`))
-    );
-    const items = details.map((detail) => ({
-      id: detail.summary.id,
-      type: translateJobType(detail.summary.job_type),
-      status: translateJobStatus(detail.summary.status),
-      startedAt: formatDateTime(detail.summary.created_at),
-      note: detail.logs.at(-1)?.message ?? "로그가 아직 없습니다."
-    }));
+        const counts = {
+          default: items.filter((item) => item.status === "대기").length,
+          warning: items.filter((item) => item.status === "실행 중").length,
+          success: items.filter((item) => item.status === "성공").length,
+          danger: items.filter((item) => item.status === "실패").length
+        };
 
-    const counts = {
-      default: items.filter((item) => item.status === "대기").length,
-      warning: items.filter((item) => item.status === "실행 중").length,
-      success: items.filter((item) => item.status === "성공").length,
-      danger: items.filter((item) => item.status === "실패").length
-    };
+        return {
+          statuses: filterPresets.jobStatuses,
+          summary: [
+            { label: "대기", value: String(counts.default), tone: "default" as const },
+            { label: "실행 중", value: String(counts.warning), tone: "warning" as const },
+            { label: "성공", value: String(counts.success), tone: "success" as const },
+            { label: "실패", value: String(counts.danger), tone: "danger" as const }
+          ],
+          items
+        };
+      },
+      () => getJobsSnapshot(projectId)
+    ),
 
-    return {
-      statuses: filterPresets.jobStatuses,
-      summary: [
-        { label: "대기", value: String(counts.default), tone: "default" },
-        { label: "실행 중", value: String(counts.warning), tone: "warning" },
-        { label: "성공", value: String(counts.success), tone: "success" },
-        { label: "실패", value: String(counts.danger), tone: "danger" }
-      ],
-      items
-    };
-  }
+  searchWorkspace: async (projectId: string | undefined, query: string): Promise<WorkspaceSearchResult[]> =>
+    withMockFallback(
+      "searchWorkspace",
+      async () => {
+        if (query.trim().length < 2) {
+          return [];
+        }
+
+        const [projects, issues, statistics, market] = await Promise.all([
+          apiClient.projects(),
+          apiClient.issues(projectId),
+          request<RawStatisticListResponse>("/stats/search", {
+            method: "POST",
+            body: JSON.stringify({ keyword: query })
+          }),
+          request<RawMarketSearchResponse>("/market/search", {
+            method: "POST",
+            body: JSON.stringify({ query })
+          })
+        ]);
+
+        return [
+          ...projects
+            .filter((project) => matchesSearch(query, [project.name, project.summary, project.issueFocus ?? ""]))
+            .slice(0, 2)
+            .map((project) => ({
+              id: `project-${project.id}`,
+              kind: "프로젝트" as const,
+              title: project.name,
+              detail: project.summary,
+              href: "/dashboard"
+            })),
+          ...issues.items
+            .filter((issue) => matchesSearch(query, [issue.title, issue.summary, issue.whyNow, ...issue.youtubeAngles]))
+            .slice(0, 4)
+            .map((issue) => ({
+              id: `issue-${issue.id}`,
+              kind: "이슈" as const,
+              title: issue.title,
+              detail: `${issue.category} · 기사 ${issue.articleCount}건`,
+              href: "/issues"
+            })),
+          ...statistics.items.slice(0, 3).map((item) => ({
+            id: `stat-${item.indicator_code}`,
+            kind: "지표" as const,
+            title: item.name,
+            detail: `${item.source_name} · ${formatValue(item.latest_value, item.unit)}`,
+            href: "/statistics"
+          })),
+          ...market.items.slice(0, 3).map((item) => ({
+            id: `market-${item.symbol}`,
+            kind: "자산" as const,
+            title: item.display_name,
+            detail: `${item.symbol} · ${formatPlainNumber(item.latest_value)}`,
+            href: "/market"
+          }))
+        ].slice(0, 8);
+      },
+      () => searchWorkspaceMock(projectId, query)
+    )
 };
 
 function toIssueCard(issue: RawIssueListResponse["items"][number]): IssueCardViewModel {
+  const articles = issue.related_articles.map((article) => ({
+    id: article.id,
+    title: article.title,
+    sourceName: article.source_name,
+    publishedAt: formatDateTime(article.published_at),
+    url: article.url,
+    summary: article.summary,
+    country: article.country ?? inferCountryFromArticle(article.source_name, article.title),
+    region: article.region ?? inferRegionFromCountry(article.country ?? inferCountryFromArticle(article.source_name, article.title)),
+    popularity: Number(article.popularity_score ?? estimatePopularity(article.source_name)),
+    credibility: Number(article.credibility_score ?? estimateCredibility(article.source_name))
+  }));
+  const regions = issue.regions?.length ? issue.regions : unique(articles.map((article) => article.country));
+  const topSources = issue.top_sources?.length ? issue.top_sources : unique(articles.map((article) => article.sourceName)).slice(0, 4);
+
   return {
     id: issue.id,
     title: issue.title,
     category: translateIssueCategory(issue.category),
     score: issue.priority_score,
-    reasons: issue.reasons
+    reasons: issue.reasons,
+    summary: issue.summary ?? `${issue.title} 관련 흐름을 경제 콘텐츠 관점에서 정리한 이슈입니다.`,
+    articleCount: issue.article_count ?? issue.related_articles.length,
+    regions,
+    topSources,
+    youtubeAngles: issue.suggested_angles?.length ? issue.suggested_angles : buildYoutubeAngles(issue.title),
+    whyNow: issue.why_now ?? buildWhyNow(issue.title, regions),
+    articles
+  };
+}
+
+function toIssueDiscoverySnapshot(response: RawIssueListResponse): IssueDiscoverySnapshot {
+  const items = response.items.map(toIssueCard);
+  return {
+    filters: filterPresets.issueCategories,
+    regionFilters: ["전체", ...unique(items.flatMap((issue) => issue.regions))],
+    sortOptions: ["우선순위", "최신성", "기사 수", "인기순"],
+    keywordSuggestions: unique(
+      items.flatMap((issue) => issue.title.split(/\s+/g).filter((token) => token.length >= 2))
+    ).slice(0, 12),
+    highlights: items.slice(0, 3).map((issue, index) => ({
+      issueId: issue.id,
+      title: issue.title,
+      subtitle:
+        index === 0
+          ? `지금 가장 주목받는 이슈 · ${issue.articleCount}건`
+          : index === 1
+            ? `시장 연결성이 높은 주제 · ${issue.regions.join("/")}`
+            : `콘텐츠 확장 포인트 · ${issue.youtubeAngles[0] ?? issue.summary}`,
+      tone: index === 0 ? "hot" : index === 1 ? "watch" : "idea"
+    })),
+    lastCollectedAt: undefined,
+    items,
+    groups: items.map((issue) => ({
+      issueId: issue.id,
+      title: `${issue.title} 기사 ${issue.articleCount}건`,
+      detail: issue.topSources.length ? `${issue.topSources.join(", ")} 기사 묶음` : "연결된 기사 없음",
+      articleCount: issue.articleCount,
+      regions: issue.regions,
+      topSources: issue.topSources,
+      articles: issue.articles
+    }))
   };
 }
 
@@ -1135,6 +1326,125 @@ function getMockAIProviderCatalog(): AIProviderCatalog {
       }
     ]
   };
+}
+
+async function buildMockImageResult(payload: {
+  scene_id: string;
+  prompt_override?: string;
+  provider_id?: string;
+  provider_mode?: string;
+}): Promise<ImageGenerationResult> {
+  const scenes = normalizeMockScenes((await getImageWorkspace()).scenes);
+  const match = scenes.find((item) => item.id === payload.scene_id) ?? scenes[0];
+  return {
+    id: `mock-image-${payload.scene_id}`,
+    sceneId: payload.scene_id,
+    sceneTitle: match?.title ?? "장면",
+    prompt: payload.prompt_override || match?.prompt || "",
+    assetUrl: `https://placehold.co/1024x1536/png?text=${encodeURIComponent(payload.scene_id)}`,
+    thumbnailUrl: `https://placehold.co/256x384/png?text=${encodeURIComponent(payload.scene_id)}`,
+    status: "ready",
+    providerId: payload.provider_id ?? "openai",
+    providerName: providerDisplayName(payload.provider_id ?? "openai"),
+    providerMode: payload.provider_mode ?? "mock"
+  };
+}
+
+async function buildMockVideoPreparationResults(payload: {
+  scene_ids: readonly string[];
+  provider_id?: string;
+  provider_mode?: string;
+}): Promise<VideoPreparationResult[]> {
+  const scenes = normalizeMockScenes((await getVideoWorkspace()).scenes);
+  return scenes
+    .filter((scene) => payload.scene_ids.includes(scene.id))
+    .map((scene, index) => ({
+      id: `mock-video-${scene.id}-${index + 1}`,
+      sceneId: scene.id,
+      sceneTitle: scene.title,
+      prompt: scene.prompt,
+      motionNotes: scene.motion,
+      bundlePath: `/mock/${scene.id}.zip`,
+      bundleDownloadPath: `/mock/${scene.id}.zip`,
+      status: "ready",
+      providerId: payload.provider_id ?? "openai",
+      providerName: providerDisplayName(payload.provider_id ?? "openai"),
+      providerMode: payload.provider_mode ?? "mock",
+      jobId: `mock-job-${index + 1}`
+    }));
+}
+
+function toMockSettingsSnapshot(snapshot: Awaited<ReturnType<typeof getSettingsSnapshotMock>>): SettingsSnapshot {
+  return {
+    tabs: snapshot.tabs,
+    sections: snapshot.sections.map((section) => ({
+      category: mockCategoryFromTab(section.tab),
+      tab: section.tab,
+      title: section.title,
+      fields: section.fields.map((field) => ({
+        category: mockCategoryFromTab(section.tab),
+        key: field.key,
+        label: field.label,
+        value: field.value,
+        placeholder: field.placeholder
+      }))
+    }))
+  };
+}
+
+function buildYoutubeAngles(title: string) {
+  return [
+    `${title}를 3가지 숫자로 설명`,
+    `${title}가 한국 시장에 주는 영향`,
+    `${title}를 볼 때 같이 확인할 지표`
+  ];
+}
+
+function buildWhyNow(title: string, regions: readonly string[]) {
+  const regionText = regions.length ? `${regions.join(", ")} 기사 흐름이 동시에 붙었습니다.` : "복수 매체 보도가 이어지고 있습니다.";
+  return `${title}는 최근 보도량과 시장 파급력이 함께 커진 주제입니다. ${regionText}`;
+}
+
+function inferCountryFromArticle(sourceName: string, title: string) {
+  const source = `${sourceName} ${title}`.toLowerCase();
+  if (/[가-힣]/.test(sourceName)) {
+    return "한국";
+  }
+  if (source.includes("reuters") || source.includes("bloomberg") || source.includes("wsj") || source.includes("seeking alpha")) {
+    return "미국";
+  }
+  if (source.includes("nikkei") || source.includes("니혼게이자이") || source.includes("japan") || source.includes("boj")) {
+    return "일본";
+  }
+  if (source.includes("caixin") || source.includes("china daily") || source.includes("신화")) {
+    return "중국";
+  }
+  return "글로벌";
+}
+
+function inferRegionFromCountry(country: string) {
+  if (country === "한국" || country === "중국" || country === "일본") return "아시아";
+  if (country === "미국") return "북미";
+  return "글로벌";
+}
+
+function estimatePopularity(sourceName: string) {
+  const source = sourceName.toLowerCase();
+  if (source.includes("reuters") || source.includes("bloomberg")) return 90;
+  if (source.includes("wsj") || source.includes("연합뉴스")) return 86;
+  return 76;
+}
+
+function estimateCredibility(sourceName: string) {
+  const source = sourceName.toLowerCase();
+  if (source.includes("reuters") || source.includes("bloomberg")) return 0.92;
+  if (source.includes("wsj") || source.includes("연합뉴스")) return 0.88;
+  return 0.8;
+}
+
+function matchesSearch(query: string, fields: readonly string[]) {
+  const normalized = query.trim().toLowerCase();
+  return fields.some((field) => field.toLowerCase().includes(normalized));
 }
 
 function unique<T>(values: readonly T[]): T[] {

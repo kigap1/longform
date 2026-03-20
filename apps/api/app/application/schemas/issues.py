@@ -14,6 +14,10 @@ class ArticleSummary(APIModel):
     published_at: datetime
     url: str
     summary: str
+    country: str | None = None
+    region: str | None = None
+    popularity_score: float | None = None
+    credibility_score: float | None = None
 
 
 class IssueSummaryCard(APIModel):
@@ -22,6 +26,12 @@ class IssueSummaryCard(APIModel):
     category: str
     priority_score: float
     reasons: list[str] = Field(default_factory=list)
+    summary: str | None = None
+    article_count: int | None = None
+    regions: list[str] = Field(default_factory=list)
+    top_sources: list[str] = Field(default_factory=list)
+    suggested_angles: list[str] = Field(default_factory=list)
+    why_now: str | None = None
     related_articles: list[ArticleSummary] = Field(default_factory=list)
 
 
@@ -34,8 +44,8 @@ class IssueRankRequest(APIModel):
     project_id: str | None = None
     category: str | None = None
     keywords: list[str] = Field(default_factory=list)
+    user_instructions: str | None = None
 
 
 class IssueRankResponse(APIModel):
     items: list[IssueSummaryCard]
-

@@ -14,8 +14,8 @@
     "build:web": "pnpm --filter web build",
     "lint:web": "pnpm --filter web lint",
     "typecheck:web": "pnpm --filter web typecheck",
-    "dev:api": "cd apps/api && uvicorn app.main:app --reload",
-    "test:api": "cd apps/api && python -m unittest discover -s tests",
+    "dev:api": "./scripts/dev-api.sh",
+    "test:api": "./scripts/test-api.sh",
     "check": "pnpm typecheck:web && pnpm build:web && pnpm test:api"
   }
 }

@@ -25,7 +25,9 @@ export default function ScriptsPage() {
   const projectId = useProjectStore((state) => state.currentProjectId);
   const stageInstruction = useProjectStore((state) => state.stageInstructions.scripts ?? "");
   const stageProvider = useProjectStore((state) => state.stageProviders.scripts ?? "");
+  const storedSelectedIssueId = useProjectStore((state) => state.selectedIssueId);
   const setStageProvider = useProjectStore((state) => state.setStageProvider);
+  const selectIssue = useProjectStore((state) => state.selectIssue);
   const { data: issuesData, isLoading: issuesLoading } = useIssuesQuery(projectId);
   const { data, isLoading } = useScriptWorkspaceQuery(projectId);
   const { data: aiProviders } = useAIProvidersQuery();
@@ -44,10 +46,14 @@ export default function ScriptsPage() {
   const selectedIssue = issuesData?.items.find((item) => item.id === selectedIssueId) ?? issuesData?.items[0];
 
   useEffect(() => {
+    if (storedSelectedIssueId && issuesData?.items.some((item) => item.id === storedSelectedIssueId)) {
+      setSelectedIssueId(storedSelectedIssueId);
+      return;
+    }
     if (!selectedIssueId && issuesData?.items[0]?.id) {
       setSelectedIssueId(issuesData.items[0].id);
     }
-  }, [issuesData, selectedIssueId]);
+  }, [issuesData, selectedIssueId, storedSelectedIssueId]);
 
   useEffect(() => {
     if (!stageProvider && aiProviders?.defaults.script) {
@@ -129,7 +135,14 @@ export default function ScriptsPage() {
           <p className="mt-2 text-sm leading-6 text-slate-500">
             현재 프로젝트 이슈 중 하나를 선택하고, 선택한 AI의 기본 모드에 맞춰 생성 흐름을 검증할 수 있습니다.
           </p>
-          <Select className="mt-4" value={selectedIssueId} onChange={(event) => setSelectedIssueId(event.target.value)}>
+          <Select
+            className="mt-4"
+            value={selectedIssueId}
+            onChange={(event) => {
+              setSelectedIssueId(event.target.value);
+              selectIssue(event.target.value);
+            }}
+          >
             {issuesData.items.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.title}
